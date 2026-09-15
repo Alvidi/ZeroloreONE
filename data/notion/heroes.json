@@ -1,0 +1,52 @@
+[
+ {
+  "id": "Heroe 1",
+  "rol": "Oráculo",
+  "movimiento": "5\"",
+  "vidas": 8,
+  "velocidad": "+2\"",
+  "salvacion": "4+",
+  "valor": 15,
+  "habilidad": "Una vez por partida, durante la Fase de Iniciativa: todas tus unidades recuperan 1D3 Vidas perdidas, sin superar su máximo."
+ },
+ {
+  "id": "Heroe 2",
+  "rol": "Mariscal de campo",
+  "movimiento": "5\"",
+  "vidas": 10,
+  "velocidad": "+4\"",
+  "salvacion": "3+",
+  "valor": 16,
+  "habilidad": "Una vez por partida, durante la Fase de Iniciativa: durante este turno, tus unidades de Choque y Especialista suman +1D3 al daño total de cada ataque que inflija daño."
+ },
+ {
+  "id": "Heroe 3",
+  "rol": "Señor de la Guerra",
+  "movimiento": "5\"",
+  "vidas": 10,
+  "velocidad": "+4\"",
+  "salvacion": "3+",
+  "valor": 20,
+  "habilidad": "Una vez por partida, cuando todas las unidades de ambos jugadores se hayan activado y antes del Fin de Turno: todas tus unidades de Choque se reactivan, recuperando 1 acción."
+ },
+ {
+  "id": "Heroe 4",
+  "rol": "Nigromante",
+  "movimiento": "5\"",
+  "vidas": 8,
+  "velocidad": "+2\"",
+  "salvacion": "4+",
+  "valor": 19,
+  "habilidad": "Una vez por partida, al final del turno: cada unidad tuya destruida durante este turno hace un chequeo de 1D6. Con 5 o 6 vuelve al campo donde cayó con la mitad de sus Vidas (redondeando hacia arriba). Si cayó trabada, se coloca a 1\" de la unidad con la que combatía."
+ },
+ {
+  "id": "Heroe 5",
+  "rol": "Místico",
+  "movimiento": "5\"",
+  "vidas": 8,
+  "velocidad": "+2\"",
+  "salvacion": "4+",
+  "valor": 17,
+  "habilidad": "Una vez por partida, durante la Fase de Iniciativa: todas tus unidades que no estén trabadas se pueden teletransportar a puestos de mando bajo tu control, colocándose en contacto con ellos. Pueden repartirse entre puestos distintos."
+ }
+]

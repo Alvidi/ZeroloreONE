@@ -1,0 +1,81 @@
+[
+ {
+  "nombre": "Fiable",
+  "descripcion": "Esta arma no tiene reglas especiales.",
+  "solo": []
+ },
+ {
+  "nombre": "Angulo Muerto",
+  "descripcion": "Esta arma no puede disparar por debajo de la mitad de su rango.",
+  "solo": [
+   "distancia"
+  ]
+ },
+ {
+  "nombre": "Brutal X+",
+  "descripcion": "Los impactos de esta arma se consideran críticos con un resultado natural de X+ en la tirada de ataque.",
+  "solo": []
+ },
+ {
+  "nombre": "Perforante",
+  "descripcion": "Los impactos de esta arma empeoran en 1 la Salvación realizada contra ellos.",
+  "solo": []
+ },
+ {
+  "nombre": "Inestable",
+  "descripcion": "Tras resolver el ataque, lanza 1D6. Con resultado de 1 o 2, la unidad que porta esta arma sufre el mismo daño que infligió al objetivo. Si el ataque no causó daño, no hay retroceso.",
+  "solo": []
+ },
+ {
+  "nombre": "Multiuso",
+  "descripcion": "Esta arma puede utilizarse para realizar la acción Disparar aunque la unidad esté trabada en combate cuerpo a cuerpo.",
+  "solo": [
+   "distancia"
+  ]
+ },
+ {
+  "nombre": "Directo",
+  "descripcion": "Esta arma impacta directamente y no utiliza Precisión; por tanto, no se ve afectada por modificadores a la Precisión.",
+  "solo": [
+   "distancia"
+  ]
+ },
+ {
+  "nombre": "Explosiva X",
+  "descripcion": "Si el objetivo sufre daño, el atacante elige hasta X miniaturas adicionales, aliadas o enemigas, a 3\" de la miniatura impactada; cada una sufre el mismo daño directo.",
+  "solo": []
+ },
+ {
+  "nombre": "Parabólica",
+  "descripcion": "Esta arma puede atacar a objetivos sin línea de visión directa, siempre que estén dentro de su Distancia.",
+  "solo": [
+   "distancia"
+  ]
+ },
+ {
+  "nombre": "Alcance",
+  "descripcion": "Esta arma CaC puede usarse contra cualquier unidad enemiga a 3\" o menos, esté o no trabada con esta unidad.",
+  "solo": [
+   "cac"
+  ]
+ },
+ {
+  "nombre": "Errática",
+  "descripcion": "Antes de resolver el ataque, lanza 1D6: el resultado es la Precisión del arma a distancia durante ese ataque.",
+  "solo": [
+   "distancia"
+  ]
+ },
+ {
+  "nombre": "Barrido",
+  "descripcion": "Arma de cuerpo a cuerpo. Al atacar, en vez de elegir un objetivo, ataca a TODAS las unidades enemigas trabadas con ella. Resuelve el ataque por separado contra cada una.",
+  "solo": [
+   "cac"
+  ]
+ },
+ {
+  "nombre": "Anti-X",
+  "descripcion": "Esta arma tiene 1D3 de daño extra contra el tipo específico, siempre y cuando el arma al menos haga 1 de daño al objetivo.",
+  "solo": []
+ }
+]

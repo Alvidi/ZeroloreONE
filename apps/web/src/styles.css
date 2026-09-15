@@ -1,0 +1,528 @@
+:root {
+  color-scheme: dark;
+  --bg: #12161c;
+  --panel: #1a2029;
+  --line: #2b323c;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --a: #3b82f6;
+  --b: #ef4444;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/*
+  Cada bando en su lado de la pantalla y el marcador arriba. En una partida
+  local el jugador mira siempre al mismo sitio, y el color del que juega manda
+  sobre el borde de la mesa y sobre su banda.
+*/
+.app {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 250px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px; padding: 10px;
+  height: 100dvh; width: 100vw; overflow: hidden;
+}
+
+/* Posición explícita: en el DOM el marcador va detrás y si no cae abajo. */
+.marcador {
+  grid-column: 1 / 4; grid-row: 1;
+  display: grid; grid-template-columns: 250px minmax(0, 1fr) 250px; gap: 10px;
+  align-items: center;
+}
+.marcador .equipo {
+  display: flex; align-items: baseline; gap: 7px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 12px;
+}
+/* El centro va en medio aunque en el DOM venga el último. */
+.marcador .equipo.pA { grid-column: 1; }
+.marcador .centro { grid-column: 2; }
+.marcador .equipo.derecha { grid-column: 3; justify-content: flex-end; }
+.marcador .equipo .nombre { font-weight: 800; letter-spacing: .08em; font-size: 12px; }
+.marcador .equipo.pA .nombre { color: var(--a); }
+.marcador .equipo.pB .nombre { color: var(--b); }
+.marcador .equipo .puntos { font-size: 22px; line-height: 1; }
+.marcador .equipo .ud { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+.marcador .equipo .chapa {
+  margin-left: auto; font-size: 9px; font-weight: 800; letter-spacing: .1em;
+  text-transform: uppercase; color: #fff; border-radius: 5px; padding: 3px 7px;
+}
+.marcador .equipo.derecha .chapa { margin: 0 auto 0 0; }
+.marcador .equipo.pA.juega { border-color: var(--a); box-shadow: 0 0 16px -6px var(--a); }
+.marcador .equipo.pB.juega { border-color: var(--b); box-shadow: 0 0 16px -6px var(--b); }
+.marcador .equipo.pA .chapa { background: var(--a); }
+.marcador .equipo.pB .chapa { background: var(--b); }
+.marcador .centro {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 7px 12px; font-size: 12px;
+}
+.marcador .centro .turno { font-weight: 700; }
+.marcador .centro .fase {
+  color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .08em;
+}
+
+/* --- Bandas laterales --- */
+.rail {
+  grid-row: 2;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.rail.pA { grid-column: 1; }
+.rail.pB { grid-column: 3; }
+.rail.pA.de-turno { border-color: var(--a); box-shadow: 0 0 20px -8px var(--a); }
+.rail.pB.de-turno { border-color: var(--b); box-shadow: 0 0 20px -8px var(--b); }
+.rail-cabecera { display: flex; align-items: baseline; justify-content: space-between; }
+.rail-cabecera .equipo { font-weight: 800; letter-spacing: .08em; font-size: 12px; }
+.rail.pA .rail-cabecera .equipo { color: var(--a); }
+.rail.pB .rail-cabecera .equipo { color: var(--b); }
+.rail-cabecera .dato { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+.rail h3 { margin: 0 0 6px; font-size: 10px; letter-spacing: .1em; }
+.rail .vacio { margin: 0 0 6px; font-size: 11px; color: var(--muted); }
+.rail .fichas { display: flex; flex-wrap: wrap; gap: 6px; }
+.rail .refuerzo {
+  width: auto; margin: 0; min-height: 34px; padding: 6px 10px; font-size: 11px;
+  background: #1b212a; border: 1px solid #323b47; border-radius: 7px; color: var(--text);
+  cursor: grab; touch-action: none;
+}
+.rail .refuerzo:hover:not(:disabled) { border-color: #64748b; }
+.rail .refuerzo.elegida { border-color: #22c55e; background: #14321f; cursor: grabbing; }
+.rail .refuerzo:disabled { opacity: .38; cursor: default; }
+.rail-unidad { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.board-wrap {
+  grid-column: 2; grid-row: 2;
+  position: relative; display: grid; place-items: center;
+  min-width: 0; min-height: 0;
+}
+.board { box-shadow: 0 0 0 3px var(--turno), 0 0 26px -4px var(--turno); }
+.app.turno-nadie .board { box-shadow: none; }
+.hud-boton {
+  width: auto; margin: 0; min-height: 34px; padding: 7px 13px;
+  font-size: 12px; font-weight: 700;
+  background: #1d4ed8; border: 1px solid #1d4ed8; border-radius: 8px; color: #fff;
+}
+.hud-boton:hover:not(:disabled) { background: #2563eb; }
+.hud-boton:disabled { opacity: .45; cursor: not-allowed; }
+.hud-boton.icono { padding: 7px 10px; }
+.hud-pista {
+  position: absolute; left: 50%; transform: translateX(-50%); top: 10px; z-index: 40;
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(18, 23, 30, .95); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 12px; font-size: 12px;
+}
+.hud-pista button { width: auto; margin: 0; padding: 5px 10px; font-size: 11px; }
+
+/* --- Hojas emergentes --- */
+.hoja-fondo {
+  position: absolute; inset: 0; z-index: 45;
+  display: grid; place-items: center;
+  background: rgba(8, 11, 16, .72); backdrop-filter: blur(2px);
+}
+.hoja {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 16px 18px;
+  width: min(420px, calc(100vw - 24px)); max-height: 82dvh; overflow-y: auto;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+}
+.hoja header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+.hoja h2 { margin: 0; font-size: 19px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.hoja .sub { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.hoja .cerrar {
+  width: auto; margin: 0 0 0 auto; padding: 2px 9px;
+  font-size: 19px; line-height: 1; background: none; border: 0; color: var(--muted);
+}
+.hoja-cuerpo { display: flex; flex-direction: column; gap: 12px; }
+.hoja .bando { display: flex; flex-direction: column; gap: 6px; }
+
+/* En móvil las hojas suben desde abajo y ocupan el ancho. */
+@media (max-width: 720px) {
+  .hoja-fondo { place-items: end stretch; }
+  .hoja {
+    width: auto; border-radius: 14px 14px 0 0; max-height: 78dvh;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+}
+
+
+/* ---------------------------------------------------------------- Ficha --- */
+/*
+  Altura fija: la ficha ocupa siempre el mismo espacio, con unidad seleccionada
+  o sin ella. Antes crecía y encogía y el tablero saltaba a cada clic.
+*/
+/*
+  Una sola fila de identidad y perfil arriba, y las dos armas debajo en
+  horizontal. Aprovecha todo el ancho disponible y se lee de arriba abajo.
+*/
+.ficha {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+/* Sin scroll: las dos armas caben una al lado de la otra. */
+.ficha .armas { display: flex; flex-direction: column; gap: 8px; }
+.ficha .arma { flex: 1; min-width: 0; }
+.ficha.bando-A { border-left-color: var(--a); }
+.ficha.bando-B { border-left-color: var(--b); }
+.ficha.vacia { background: rgba(26, 32, 41, .45); border-color: #232a34; border-left-color: #232a34; }
+
+.ficha header { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 0; }
+.ficha .id {
+  font-weight: 800; font-size: 13px; background: #0f151d;
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px;
+}
+.ficha .nombre { font-weight: 700; font-size: 15px; }
+.ficha .clase {
+  text-transform: uppercase; letter-spacing: .05em; font-size: 10px;
+  background: #253041; border-radius: 3px; padding: 2px 6px; color: #cbd5e1;
+}
+.ficha .faccion { color: var(--muted); }
+.ficha .estado { font-size: 10px; border-radius: 3px; padding: 2px 6px; text-transform: uppercase; }
+.ficha .estado.muerta { background: #3f1d1d; color: #fca5a5; }
+.ficha .estado.dormida { background: #2a2f38; color: #94a3b8; }
+.ficha .estado.trabada { background: #3a2f10; color: #fcd34d; }
+
+/* El perfil continúa la misma fila que la cabecera. */
+.ficha .perfil { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0; }
+/* En la columna todo tiene que poder encoger y envolver: no hay sitio de sobra. */
+.ficha header, .ficha .perfil { flex-shrink: 1; min-width: 0; }
+.ficha .fila-superior > * { flex: 1 1 100%; }
+.ficha .cabecera { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.ficha .stat {
+  background: #10161e; border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 8px; min-width: 0;
+}
+.ficha .stat b { display: block; font-size: 14px; line-height: 1.15; }
+.ficha .stat span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.ficha .stat.acciones b { color: #4ade80; }
+.ficha .stat .barra { margin-top: 4px; height: 5px; background: #0b1220; border-radius: 3px; overflow: hidden; }
+.ficha .stat .barra div { height: 100%; }
+
+
+.ficha td.habs { color: #fbbf24; }
+
+/* ------------------------------------------------------- Barra superior --- */
+.barra {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 0 0 8px; border: 0; border-bottom: 1px solid var(--line);
+  border-radius: 0; background: none;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 12px; font-size: 13px;
+}
+.barra .turno { font-weight: 700; }
+.barra .fase { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+.barra .activo { font-weight: 700; }
+.barra .hueco { flex: 1; }
+.barra .semilla { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 11px; }
+.barra .semilla input { width: 82px; margin: 0; }
+.barra button { width: auto; margin: 0; }
+
+/* ---------------------------------------------------- Pantallas de fase --- */
+.pantalla {
+  position: absolute; inset: 0; z-index: 20;
+  display: grid; place-items: center;
+  background: rgba(8, 11, 16, .82);
+  backdrop-filter: blur(2px);
+  border-radius: 10px;
+}
+.pantalla-caja {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 26px 34px; text-align: center;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+  min-width: 320px;
+}
+.pantalla-caja h2 { font-size: 26px; margin: 0 0 4px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.pantalla-caja .sub { color: var(--muted); margin: 0 0 18px; }
+.pantalla-acciones { margin-top: 18px; }
+button.grande {
+  width: auto; margin: 0 auto; padding: 11px 26px; font-size: 15px; font-weight: 700;
+  background: #1d4ed8; border-color: #1d4ed8; text-align: center;
+}
+button.grande:hover { background: #2563eb; }
+
+.dados { display: flex; gap: 34px; justify-content: center; }
+.tirada { display: flex; flex-direction: column; align-items: center; gap: 7px; opacity: .55; }
+.tirada.gana { opacity: 1; }
+.tirada .jugador { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tirada .etiqueta { font-size: 11px; font-weight: 700; color: #4ade80; }
+.tirada.pA .jugador { color: var(--a); }
+.tirada.pB .jugador { color: var(--b); }
+
+/* ------------------------------------------------ Menú flotante de unidad --- */
+.menu-unidad.fijo {
+  position: static; width: auto; box-shadow: none;
+  background: var(--panel);
+}
+/*
+  Junto a la miniatura. El ancla es el centro de la unidad; el menú se separa
+  un poco y se abre hacia el lado con sitio, como un menú contextual, para no
+  taparla ni salirse del tablero.
+*/
+.menu-unidad.junto-a {
+  position: absolute; z-index: 18; width: 212px;
+  transform: translateY(-12px);
+  animation: menu-aparece .13s ease-out;
+}
+.menu-unidad.junto-a.der { margin-left: 26px; }
+.menu-unidad.junto-a.izq { transform: translate(-100%, -12px); margin-left: -26px; }
+@keyframes menu-aparece {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* Una lista corta y clicable: solo salen las acciones que sí se pueden hacer. */
+.menu-unidad.junto-a .accion-item { min-height: 32px; }
+.menu-unidad {
+  position: absolute; z-index: 15; width: 230px;
+  background: rgba(18, 23, 30, .97);
+  border: 1px solid var(--line); border-left: 4px solid var(--line);
+  border-radius: 10px; padding: 9px 10px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+  font-size: 12px;
+}
+.menu-unidad.bando-A { border-left-color: var(--a); }
+.menu-unidad.bando-B { border-left-color: var(--b); }
+.menu-unidad header { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+.menu-unidad .cerrar {
+  width: auto; margin: 0 0 0 auto; padding: 0 6px; font-size: 16px; line-height: 1;
+  background: none; border: none; color: var(--muted);
+}
+.menu-unidad h4 {
+  margin: 9px 0 4px; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted);
+}
+.menu-unidad h4 small { text-transform: none; letter-spacing: 0; opacity: .7; }
+.menu-unidad .nota { color: var(--muted); margin: 0 0 7px; font-size: 11px; }
+.menu-unidad .acciones-restantes { margin: 0 0 6px; font-weight: 700; color: #4ade80; }
+.menu-unidad .acciones-restantes .trabada { color: #fbbf24; }
+.menu-unidad button.accion { display: block; width: 100%; margin-bottom: 4px; padding: 5px 8px; text-align: left; }
+.menu-unidad button.principal { background: #1d4ed8; border-color: #1d4ed8; text-align: center; font-weight: 700; }
+.menu-unidad button.terminar { margin-top: 8px; text-align: center; }
+.menu-unidad .arma { display: block; font-weight: 600; }
+.menu-unidad .perfil { display: block; font-size: 10px; color: var(--muted); }
+.menu-unidad .habs { display: block; font-size: 10px; color: #fbbf24; }
+
+/* ------------------------------------------------------------- Avisos --- */
+.aviso {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  z-index: 18; max-width: 76%; padding: 9px 14px; font-size: 12.5px; cursor: pointer;
+  background: #4a1d1d; border: 1px solid #b91c1c; border-radius: 8px; color: #fecaca;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .5);
+}
+
+.menu-unidad button.deshacer {
+  background: #2b2416; border-color: #a16207; color: #fbbf24; text-align: center;
+}
+.menu-unidad button.deshacer:hover { background: #3a3018; }
+.menu-unidad button.deshacer .perfil { color: #a16207; }
+
+.menu-unidad .par { display: flex; gap: 6px; margin-bottom: 4px; }
+.menu-unidad .par button { flex: 1; margin: 0; text-align: center; padding: 6px 4px; font-weight: 600; }
+.menu-unidad button.confirmar { background: #14532d; border-color: #16a34a; color: #86efac; }
+.menu-unidad button.confirmar:hover { background: #166534; }
+
+/* ------------------------------------------------ Desplegable de acciones --- */
+.menu-unidad .lista-acciones { list-style: none; margin: 0 0 8px; padding: 0; }
+.menu-unidad .lista-acciones li { margin-bottom: 3px; }
+.menu-unidad button.accion-item {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+  width: 100%; margin: 0; padding: 5px 8px; text-align: left;
+  background: #232c37; border: 1px solid var(--line); border-radius: 6px;
+}
+.menu-unidad button.accion-item:hover:not(:disabled) { background: #2e3947; border-color: #3f4a5a; }
+.menu-unidad button.accion-item .nombre { font-weight: 600; }
+.menu-unidad button.accion-item .coste {
+  font-size: 10px; color: var(--muted); background: #0f151d;
+  border-radius: 3px; padding: 0 5px; align-self: center;
+}
+.menu-unidad button.accion-item .motivo {
+  grid-column: 1 / -1; font-size: 10px; color: #6b7280; font-style: italic;
+}
+/* Apagada: negra y sin color, para que se lea de un vistazo que no se puede. */
+.menu-unidad button.accion-item.apagada {
+  background: #0b0e13; border-color: #1a1f27; color: #4b5563; opacity: 1;
+}
+.menu-unidad button.accion-item.elegida {
+  background: #14532d; border-color: #22c55e; color: #bbf7d0;
+}
+.menu-unidad button.accion-item.elegida .coste { background: #052e16; color: #86efac; }
+
+.menu-unidad .en-curso {
+  margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
+  background: #14532d; border: 1px solid #22c55e;
+}
+.menu-unidad .en-curso b { display: block; color: #bbf7d0; font-size: 13px; }
+.menu-unidad .en-curso span { display: block; color: #86efac; font-size: 11px; margin-top: 2px; }
+
+/* Anclado a la esquina mientras se coloca la unidad, para no tapar el tablero. */
+.menu-unidad.anclado {
+  left: 12px; top: 12px; width: 210px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .6);
+}
+
+/* En la columna la fase es un bloque más, no una capa sobre la mesa. */
+.pantalla.lateral {
+  position: static; inset: auto;
+  display: block; background: none; backdrop-filter: none;
+}
+.pantalla.lateral .pantalla-caja {
+  min-width: 0; width: 100%; padding: 14px 16px; text-align: left;
+  box-shadow: none;
+}
+.pantalla.lateral .pantalla-caja h2 { font-size: 18px; }
+.pantalla.lateral .pantalla-caja .sub { margin-bottom: 12px; font-size: 12px; }
+.pantalla.lateral .dados { gap: 18px; justify-content: flex-start; }
+.pantalla.lateral button.grande { width: 100%; padding: 9px 14px; font-size: 14px; }
+.aviso-fase {
+  font-size: 11.5px; color: var(--muted); background: #10151d;
+  border-left: 3px solid #334155; border-radius: 0 5px 5px 0;
+  padding: 7px 9px; margin: 0 0 12px;
+}
+
+/* ------------------------------------------------------ Pop-up de combate --- */
+.combate {
+  position: absolute; inset: 0; z-index: 40;
+  display: grid; place-items: center;
+  background: rgba(6, 9, 13, .86); backdrop-filter: blur(3px);
+  border-radius: 10px;
+}
+.combate-caja {
+  width: min(560px, 92%);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 18px 20px; box-shadow: 0 24px 64px rgba(0, 0, 0, .65);
+}
+
+.duelo { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px; margin-bottom: 16px; }
+.duelo .lado { display: flex; flex-direction: column; gap: 1px; padding-left: 10px; border-left: 4px solid var(--line); }
+.duelo .lado.derecha { text-align: right; padding: 0 10px 0 0; border-left: 0; border-right: 4px solid var(--line); }
+.duelo .lado.bando-A { border-color: var(--a); }
+.duelo .lado.bando-B { border-color: var(--b); }
+.duelo .rol { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.duelo .lado b { font-size: 17px; }
+.duelo .lado .nombre { font-size: 12px; }
+.duelo .lado .arma { font-size: 11px; color: #fbbf24; }
+.duelo .versus { font-size: 15px; font-weight: 800; color: #475569; letter-spacing: .08em; }
+
+.combate .tirada { border-top: 1px solid var(--line); padding-top: 10px; margin-bottom: 10px; }
+.combate .tirada h4 {
+  margin: 0 0 8px; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted);
+}
+.combate .tirada.activa h4 { color: #fbbf24; }
+.dados-fila { display: flex; flex-wrap: wrap; gap: 7px; min-height: 46px; align-items: center; }
+.sin-dados { color: var(--muted); font-size: 12px; margin: 0; }
+
+/* Cada dado entra con un golpe seco, como si cayera en la mesa. */
+@keyframes cae { from { transform: scale(1.5) rotate(-14deg); opacity: 0; } to { transform: none; opacity: 1; } }
+.dado-res { display: inline-flex; border-radius: 10px; padding: 2px; animation: cae .18s ease-out; }
+.dado-res.critico { background: #78350f; box-shadow: 0 0 0 2px #f59e0b; }
+.dado-res.impacto { background: #14532d; box-shadow: 0 0 0 2px #22c55e; }
+.dado-res.fallo { opacity: .38; }
+.dado-res.bloqueado { background: #1e3a5f; box-shadow: 0 0 0 2px #3b82f6; }
+.dado-res.pasa { background: #4a1d1d; box-shadow: 0 0 0 2px #ef4444; }
+.combate .resumen { margin: 7px 0 0; font-size: 12px; color: #cbd5e1; }
+
+.desenlace {
+  display: flex; align-items: center; gap: 18px;
+  border-top: 1px solid var(--line); padding-top: 12px; margin-bottom: 10px;
+}
+.desenlace .danio { text-align: center; }
+.desenlace .cifra { display: block; font-size: 34px; font-weight: 800; line-height: 1; color: #f87171; }
+.desenlace .etiqueta { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.desenlace .vidas { flex: 1; font-size: 12px; }
+.desenlace .vidas .barra { margin-top: 5px; height: 7px; background: #0b1220; border-radius: 4px; overflow: hidden; }
+.desenlace .vidas .barra div { height: 100%; transition: width .4s ease-out; }
+.desenlace .destruida { display: block; margin-top: 5px; color: #f87171; font-weight: 700; }
+
+.combate .notas {
+  list-style: none; margin: 0 0 12px; padding: 8px 10px; font-size: 11px;
+  background: #2a2413; border-left: 3px solid #a16207; border-radius: 0 5px 5px 0; color: #fbbf24;
+}
+.combate .notas li { margin-bottom: 2px; }
+.combate footer { text-align: center; }
+.combate button.saltar {
+  width: auto; margin: 0 auto; padding: 5px 14px; font-size: 11px; color: var(--muted); text-align: center;
+}
+
+/* En la fase de carga se deja ver el tablero: la unidad se está aproximando. */
+.combate.fase-carga { background: rgba(6, 9, 13, .42); backdrop-filter: none; }
+.combate.fase-carga .combate-caja { opacity: .96; }
+
+.ficha .rol { font-size: 11px; color: #fbbf24; font-style: italic; }
+
+/* ---------------------------------------------------------- Armas de ficha --- */
+.ficha .arma {
+  background: #10161e; border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px;
+}
+.ficha .arma .tipo {
+  display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin-bottom: 4px;
+}
+.ficha .arma .valores { display: flex; gap: 16px; flex-wrap: wrap; }
+.ficha .arma .v b { display: block; font-size: 14px; line-height: 1.15; }
+.ficha .arma .v span { font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.ficha .arma .v.habs b { font-size: 11px; color: #fbbf24; font-weight: 600; }
+
+.ficha .fila-superior { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+
+/* Desglose de salvación en la cabecera del defensor. */
+.duelo .salvacion { display: flex; align-items: center; gap: 5px; justify-content: flex-end; font-size: 11px; }
+.duelo .salvacion .base { color: #cbd5e1; font-weight: 700; }
+.duelo .salvacion .mod {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 3px;
+}
+.duelo .salvacion .mod.cobertura { background: #2a2413; color: #fbbf24; border: 1px solid #a16207; }
+.duelo .salvacion .flecha { color: var(--muted); }
+.duelo .salvacion .final { color: #4ade80; font-weight: 800; font-size: 13px; }
+
+/* --- Refuerzos desde la Reserva, en la Fase de Iniciativa --- */
+.refuerzos { margin-top: 14px; border-top: 1px solid #2a323d; padding-top: 12px; }
+.refuerzos h4 {
+  margin: 0 0 8px; font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; color: #94a3b8; font-weight: 700;
+}
+.refuerzos .bando { margin-bottom: 10px; }
+.refuerzos .jugador { font-size: 11px; font-weight: 700; color: #cbd5e1; }
+.refuerzos .pA .jugador { color: #60a5fa; }
+.refuerzos .pB .jugador { color: #f87171; }
+.refuerzos .sin-puesto { margin-left: 6px; font-size: 10px; color: #64748b; }
+.refuerzos .fichas { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.refuerzos .refuerzo {
+  background: #1b212a; border: 1px solid #323b47; color: #e2e8f0;
+  border-radius: 6px; padding: 5px 9px; font-size: 11px; cursor: pointer;
+}
+.refuerzos .refuerzo:hover:not(:disabled) { border-color: #64748b; }
+.refuerzos .refuerzo.elegida { border-color: #22c55e; background: #14321f; }
+.refuerzos .refuerzo:disabled { opacity: .4; cursor: default; }
+
+/* --- Quién lleva cada bando --- */
+.ia-mandos h4 {
+  margin: 0 0 8px; font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted);
+}
+.ia-bando {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px; font-size: 12px; color: var(--text);
+}
+.ia-bando input { width: auto; margin: 0; }
+.ia-bando.pA span { color: var(--a); }
+.ia-bando.pB span { color: var(--b); }
+.marcador .equipo .maquina {
+  font-size: 9px; font-weight: 800; letter-spacing: .08em;
+  color: var(--muted); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 5px;
+}

@@ -1,0 +1,47 @@
+[
+ {
+  "nombre": "Granada",
+  "descripcion": "Durante su activación, la unidad puede usar este objeto, consumiendo 1 acción: elige una unidad enemiga a 6\" o menos, que sufre 1D6 de daño directo (no se salva). Explosiva (1). Una sola granada por unidad.",
+  "valor": 3
+ },
+ {
+  "nombre": "Botiquín",
+  "descripcion": "Durante su activación, consumiendo 1 acción, recupera 3 Vidas perdidas.",
+  "valor": 2
+ },
+ {
+  "nombre": "Escudo",
+  "descripcion": "Cuando la unidad sea declarada objetivo de un ataque, antes de tirar ningún dado: ignora todo el daño de ese ataque.",
+  "valor": 4
+ },
+ {
+  "nombre": "Cortina de humo",
+  "descripcion": "Durante su activación, consumiendo 1 acción: cuenta como en cobertura hasta el final del turno.",
+  "valor": 2
+ },
+ {
+  "nombre": "Estimulante",
+  "descripcion": "Al activarse: +3\" a su movimiento durante esa activación (también al Cargar o Correr).",
+  "valor": 1
+ },
+ {
+  "nombre": "Bengala de despliegue",
+  "descripcion": "Al desplegarse, la unidad puede hacerlo como si tuviera Avanzadilla, a 9\" o menos de un puesto de mando aliado.",
+  "valor": 2
+ },
+ {
+  "nombre": "Blindaje reactivo",
+  "descripcion": "Si recibe daño de un ataque: redúcelo en 1D3.",
+  "valor": 2
+ },
+ {
+  "nombre": "Munición certera",
+  "descripcion": "Tras resolver la tirada de Precisión de un ataque a distancia: repite todos los dados fallados.",
+  "valor": 2
+ },
+ {
+  "nombre": "Salvavidas",
+  "descripcion": "Tras resolver una tirada de Salvación: repite todos los dados de Salvación fallados contra ese ataque.",
+  "valor": 3
+ }
+]
