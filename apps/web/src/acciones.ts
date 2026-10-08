@@ -14,7 +14,7 @@ import {
   type Unit,
   type UnitProfile,
 } from '@zerolore/core';
-import { HABILIDADES_ACTIVAS } from './setup.ts';
+import { HABILIDADES_ARMA, HABILIDADES_UNIDAD } from './setup.ts';
 
 /**
  * Estado de una acción para la unidad activa: si se puede hacer ahora mismo y,
@@ -64,17 +64,17 @@ export function motivoNoDisparo(
   if (o.trabadaCon.length > 0 && !IGNORA_TRABADO.includes(op.clase) && !o.trabadaCon.includes(u.id)) {
     return 'Trabada: no puede ser disparada desde fuera';
   }
-  if (HABILIDADES_ACTIVAS && state.profiles[o.profileId]?.habilidad?.nombre === 'Terror') {
+  if (HABILIDADES_UNIDAD && state.profiles[o.profileId]?.habilidad?.nombre === 'Terror') {
     const d = baseDistance(u.position, p.radioPeana, o.position, op.radioPeana);
     if (d <= 12) return 'Terror: no se le puede disparar a 12" o menos';
   }
 
   const d = baseDistance(u.position, p.radioPeana, o.position, op.radioPeana);
   if (d > arma.distancia) return `Fuera de alcance (${d.toFixed(1)}" > ${arma.distancia}")`;
-  if (HABILIDADES_ACTIVAS && anguloMuertoBloquea(arma, d)) {
+  if (HABILIDADES_ARMA && anguloMuertoBloquea(arma, d)) {
     return `Ángulo muerto: mínimo ${(arma.distancia / 2).toFixed(0)}"`;
   }
-  const parabolica = HABILIDADES_ACTIVAS && hasAbility(arma.habilidades, 'Parabólica');
+  const parabolica = HABILIDADES_ARMA && hasAbility(arma.habilidades, 'Parabólica');
   if (!parabolica && !lineOfSight(state, u, p, o, op).visible) {
     return 'Sin línea de visión';
   }
@@ -141,23 +141,51 @@ export function objetivosDeCarga(state: GameState, u: Unit, p: UnitProfile): str
 const hayObjetivoDeCarga = (state: GameState, u: Unit, p: UnitProfile): boolean =>
   objetivosDeCarga(state, u, p).length > 0;
 
-/** ¿Puede atacar en cuerpo a cuerpo? Trabada, o con un arma con Alcance a 3". */
-function hayObjetivoCaC(state: GameState, u: Unit, p: UnitProfile): boolean {
-  if (u.trabadaCon.length > 0) return true;
+/**
+ * A quién puede pegar en cuerpo a cuerpo: las unidades con las que está trabada
+ * más las que tenga a 1" o menos —el ataque suelto, que no traba a ninguna de
+ * las dos—. Un arma con Alcance estira ese suelto hasta 3".
+ */
+export function objetivosDeCaC(state: GameState, u: Unit, p: UnitProfile): string[] {
   const conAlcance =
-    HABILIDADES_ACTIVAS &&
+    HABILIDADES_ARMA &&
     p.armas.some((w) => w.kind === 'cuerpo_a_cuerpo' && hasAbility(w.habilidades, 'Alcance'));
-  if (!conAlcance) return false;
-  return enemigosVivos(state, u).some((o) => {
+  const suelto = conAlcance ? 3 : 1;
+
+  const ids = new Set(u.trabadaCon);
+  for (const o of enemigosVivos(state, u)) {
     const op = state.profiles[o.profileId];
-    return !!op && baseDistance(u.position, p.radioPeana, o.position, op.radioPeana) <= 3;
-  });
+    if (!op) continue;
+    if (baseDistance(u.position, p.radioPeana, o.position, op.radioPeana) <= suelto) ids.add(o.id);
+  }
+  return [...ids];
 }
+
+const hayObjetivoCaC = (state: GameState, u: Unit, p: UnitProfile): boolean =>
+  objetivosDeCaC(state, u, p).length > 0;
 
 /**
  * Las seis acciones del reglamento con su disponibilidad real. Devuelve
  * siempre las seis: las que no puede hacer salen apagadas con su motivo.
  */
+/**
+ * Por qué esta unidad no puede empezar a jugar ahora mismo. `null` si puede.
+ * Sirve para explicar en la rueda qué pasa, en vez de enseñar seis acciones
+ * apagadas sin decir por qué.
+ */
+export function motivoNoActivable(state: GameState, unidad: Unit): string | null {
+  if (unidad.vidas <= 0) return 'Está destruida';
+  if (state.fase !== 'Activaciones') return 'Aún no han empezado las activaciones';
+  if (state.unidadActiva !== null && state.unidadActiva !== unidad.id) {
+    return 'Hay otra unidad a media activación';
+  }
+  if (unidad.activated) return 'Ya ha jugado este turno';
+  if (state.jugadorActivo !== unidad.owner) {
+    return `Le toca a ${state.jugadorActivo === 'A' ? 'AZUL' : 'ROJO'}`;
+  }
+  return null;
+}
+
 export function accionesDisponibles(
   state: GameState,
   unidad: Unit | undefined,
@@ -174,8 +202,15 @@ export function accionesDisponibles(
   });
 
   if (!unidad || !perfil) return orden.map((k) => base(k, false, 'Sin unidad'));
+  /*
+    No hace falta activar a mano: si la unidad PUEDE activarse ahora, sus
+    acciones se calculan igual que si ya lo estuviera, y la activación la
+    dispara la primera acción que se ejecute. Lo que se sigue respetando es de
+    quién es el turno y que cada unidad juega una vez.
+  */
   if (state.unidadActiva !== unidad.id) {
-    return orden.map((k) => base(k, false, 'La unidad no está activada'));
+    const motivo = motivoNoActivable(state, unidad);
+    if (motivo) return orden.map((k) => base(k, false, motivo));
   }
 
   const trabada = unidad.trabadaCon.length > 0;
@@ -224,7 +259,7 @@ export function accionesDisponibles(
       case 'AtacarCaC':
         return hayObjetivoCaC(state, unidad, perfil)
           ? base(kind, true, '')
-          : base(kind, false, 'No está trabada con nadie');
+          : base(kind, false, 'Ningún enemigo trabado ni a 1"');
       case 'Destrabarse':
         return trabada ? base(kind, true, '') : base(kind, false, 'No está trabada');
     }

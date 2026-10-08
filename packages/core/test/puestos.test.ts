@@ -31,9 +31,9 @@ const puesto = (over: Partial<Puesto> = {}): Puesto => ({
 });
 
 const estado = (over: Partial<GameState> = {}): GameState => ({
-  mode: 'Escaramuza', turno: 1, fase: 'Iniciativa',
+  mode: 'Escaramuza', turno: 1, fase: 'Despliegue',
   jugadores: ['A', 'B'], ordenIniciativa: ['A', 'B'], jugadorActivo: 'A', unidadActiva: null,
-  units: {}, profiles: { p: perfil() }, terrain: [], puestos: [puesto()], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6,
+  units: {}, profiles: { p: perfil() }, terrain: [], puestos: [puesto()], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6,
   rngState: 7, ...over,
 });
 
@@ -154,11 +154,11 @@ describe('Desplegar desde la Reserva', () => {
     if (!r.ok) expect(r.reason).toContain('enemigos');
   });
 
-  it('los refuerzos solo entran en la Fase de Iniciativa', () => {
-    const r = conReserva({ fase: 'Activaciones' })
+  it('en partida no se despliega con una unidad a medias', () => {
+    const r = conReserva({ fase: 'Activaciones', unidadActiva: 'a1' })
       .execute({ type: 'Desplegar', unitId: 'a2', puestoId: 'cg-a', posicion: vec(10, 10.8) });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('Iniciativa');
+    if (!r.ok) expect(r.reason).toContain('Termina la activación');
   });
 
   it('no se despliega encima de la escenografía', () => {
@@ -170,7 +170,7 @@ describe('Desplegar desde la Reserva', () => {
   });
 });
 
-describe('La ventana de refuerzos', () => {
+describe('Refuerzos: uno por puesto controlado y turno', () => {
   const conReserva = () =>
     new Engine(
       estado({
@@ -181,29 +181,48 @@ describe('La ventana de refuerzos', () => {
       { habilidades: false },
     );
 
-  it('sigue abierta después de tirar Iniciativa', () => {
+  /** Deja la partida en Activaciones con A de vez y su reserva intacta. */
+  const enPartida = (): Engine => {
     const e = conReserva();
     e.execute({ type: 'TirarIniciativa' });
-    expect(e.getState().fase).toBe('Iniciativa');
-    const r = e.execute({ type: 'Desplegar', unitId: 'a2', puestoId: 'cg-a', posicion: vec(10, 10.8) });
-    expect(r.ok).toBe(true);
+    // Con reserva pendiente la tirada abre el despliegue inicial; se pasa.
+    while (e.getState().fase === 'Despliegue') {
+      e.execute({ type: 'PasarDespliegue', jugador: e.getState().jugadorActivo! });
+    }
+    return e;
+  };
+
+  it('con reserva, la tirada abre el despliegue inicial', () => {
+    const e = conReserva();
+    e.execute({ type: 'TirarIniciativa' });
+    expect(e.getState().fase).toBe('Despliegue');
   });
 
-  it('se cierra al comenzar las activaciones', () => {
-    const e = conReserva();
-    e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
+  it('cuando todos pasan, empieza el turno 1 sin botón', () => {
+    const e = enPartida();
     expect(e.getState().fase).toBe('Activaciones');
+    expect(e.getState().turno).toBe(1);
+  });
+
+  it('en partida se puede meter un refuerzo, y consume la vez', () => {
+    const e = enPartida();
+    // A controla su Cuartel General: un refuerzo por turno.
+    const s = e.getState();
+    const antes = s.jugadorActivo;
+    expect(antes).toBe('A');
     const r = e.execute({ type: 'Desplegar', unitId: 'a2', puestoId: 'cg-a', posicion: vec(10, 10.8) });
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
+    expect(e.getState().refuerzosUsados.A).toBe(1);
+    // La vez pasa al rival: desplegar cuenta como jugada.
+    expect(e.getState().jugadorActivo).not.toBe(antes);
   });
 });
 
-describe('Cada turno empieza por su propia tirada', () => {
+describe('La Iniciativa se tira una sola vez', () => {
   const partida = () =>
     new Engine(
       estado({
-        fase: 'Iniciativa',
+        fase: 'Despliegue',
         ordenIniciativa: [],
         jugadorActivo: null,
         units: { a1: unit('a1', 'A', 20, 20), b1: unit('b1', 'B', 30, 20) },
@@ -212,7 +231,7 @@ describe('Cada turno empieza por su propia tirada', () => {
       { habilidades: false },
     );
 
-  it('no se puede tirar Iniciativa dos veces en el mismo turno', () => {
+  it('no se puede tirar Iniciativa dos veces', () => {
     const e = partida();
     expect(e.execute({ type: 'TirarIniciativa' }).ok).toBe(true);
     const otra = e.execute({ type: 'TirarIniciativa' });
@@ -220,10 +239,10 @@ describe('Cada turno empieza por su propia tirada', () => {
     if (!otra.ok) expect(otra.reason).toContain('ya está tirada');
   });
 
-  it('al terminar el turno se borra el orden y hay que volver a tirar', () => {
+  it('el turno siguiente arranca solo y lo abre el otro jugador', () => {
     const e = partida();
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
+    const orden1 = [...e.getState().ordenIniciativa];
     for (const id of ['a1', 'b1']) {
       e.execute({ type: 'ActivarUnidad', unitId: id });
       e.execute({ type: 'TerminarActivacion', unitId: id });
@@ -233,12 +252,13 @@ describe('Cada turno empieza por su propia tirada', () => {
 
     const s = e.getState();
     expect(s.turno).toBe(2);
-    expect(s.fase).toBe('Iniciativa');
-    expect(s.ordenIniciativa).toEqual([]);
-    expect(s.jugadorActivo).toBeNull();
-    // Y sin tirar, no se abren las activaciones.
-    expect(e.execute({ type: 'ComenzarActivaciones' }).ok).toBe(false);
-    expect(e.execute({ type: 'TirarIniciativa' }).ok).toBe(true);
+    // Ni fase de Iniciativa ni tirada nueva: se sigue jugando directamente.
+    expect(s.fase).toBe('Activaciones');
+    expect(s.jugadorActivo).not.toBeNull();
+    // Lo que se alterna es quién abre: el orden rota.
+    expect(s.ordenIniciativa[0]).toBe(orden1[1]);
+    expect(s.jugadorActivo).toBe(orden1[1]);
+    expect(e.execute({ type: 'TirarIniciativa' }).ok).toBe(false);
   });
 });
 
@@ -246,7 +266,7 @@ describe('Puntuación por puestos controlados', () => {
   it('cada puesto controlado suma 5 al cerrar el turno', () => {
     const e = new Engine(
       estado({
-        fase: 'Iniciativa',
+        fase: 'Despliegue',
         ordenIniciativa: [],
         jugadorActivo: null,
         // A ocupa su puesto; B está lejos y no controla nada.
@@ -257,7 +277,6 @@ describe('Puntuación por puestos controlados', () => {
       { habilidades: false },
     );
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     for (const id of ['a1', 'b1']) {
       e.execute({ type: 'ActivarUnidad', unitId: id });
       e.execute({ type: 'TerminarActivacion', unitId: id });
@@ -304,7 +323,6 @@ describe('Guerra Total: cómo se gana', () => {
   /** Activa por orden hasta que la fase se cierre, y pasa de turno. */
   const cerrarTurno = (e: Engine): void => {
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     for (let paso = 0; paso < 20 && e.getState().fase === 'Activaciones'; paso += 1) {
       const s = e.getState();
       const toca = Object.values(s.units).find(
@@ -320,7 +338,7 @@ describe('Guerra Total: cómo se gana', () => {
   it('tomar el Cuartel General enemigo gana en el acto', () => {
     const e = new Engine(
       estado({
-        fase: 'Iniciativa', ordenIniciativa: [], jugadorActivo: null,
+        fase: 'Despliegue', ordenIniciativa: [], jugadorActivo: null,
         // A tiene dos unidades dentro del CG de B; B no lo defiende.
         units: {
           // A ocupa el CG de B; b1 anda lejos y no defiende nada.
@@ -342,7 +360,7 @@ describe('Guerra Total: cómo se gana', () => {
   it('al agotarse los turnos gana quien más puntos lleva', () => {
     const e = new Engine(
       estado({
-        fase: 'Iniciativa', ordenIniciativa: [], jugadorActivo: null,
+        fase: 'Despliegue', ordenIniciativa: [], jugadorActivo: null,
         turnosTotales: 1,
         units: { a1: unit('a1', 'A', 5, 5), b1: unit('b1', 'B', 30, 30) },
         // A controla dos puestos y B solo el suyo: 10 a 5.
@@ -359,5 +377,39 @@ describe('Guerra Total: cómo se gana', () => {
     expect(e.getState().puntos.B).toBe(5);
     const fin = e.getLog().find((ev) => ev.type === 'PartidaTerminada');
     if (fin?.type === 'PartidaTerminada') expect(fin.ganador).toBe('A');
+  });
+});
+
+describe('El Héroe despliega el primero', () => {
+  const conHeroe = () =>
+    new Engine(
+      estado({
+        profiles: { p: perfil(), h: perfil({ id: 'h', clase: 'Heroe', valor: 15 }) },
+        reserva: [
+          { id: 'a1', profileId: 'p', owner: 'A' },
+          { id: 'a2', profileId: 'h', owner: 'A' },
+        ],
+      }),
+      [],
+      { habilidades: false },
+    );
+
+  it('mientras el Héroe esté en reserva no sale nadie más', () => {
+    const r = conHeroe().execute({ type: 'Desplegar', unitId: 'a1', puestoId: 'cg-a', posicion: vec(10, 10) });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('Héroe');
+  });
+
+  it('el Héroe sí puede salir', () => {
+    const r = conHeroe().execute({ type: 'Desplegar', unitId: 'a2', puestoId: 'cg-a', posicion: vec(10, 10) });
+    expect(r.ok).toBe(true);
+  });
+
+  it('un ejército sin Héroe en reserva despliega en cualquier orden', () => {
+    const e = new Engine(
+      estado({ reserva: [{ id: 'a1', profileId: 'p', owner: 'A' }] }),
+      [], { habilidades: false },
+    );
+    expect(e.execute({ type: 'Desplegar', unitId: 'a1', puestoId: 'cg-a', posicion: vec(10, 10) }).ok).toBe(true);
   });
 });

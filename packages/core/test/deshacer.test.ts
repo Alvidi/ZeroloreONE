@@ -25,18 +25,17 @@ const unit = (id: string, owner: string, x: number, y: number): Unit => ({
 });
 
 const estado = (): GameState => ({
-  mode: 'Escaramuza', turno: 1, fase: 'Iniciativa',
+  mode: 'Escaramuza', turno: 1, fase: 'Despliegue',
   jugadores: ['A', 'B'], ordenIniciativa: [], jugadorActivo: null, unidadActiva: null,
   units: { a1: unit('a1', 'A', 10, 10), b1: unit('b1', 'B', 10, 26) },
   profiles: { choque_asalto: perfil },
-  terrain: [], puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: 99,
+  terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: 99,
 });
 
 describe('Deshacer una jugada', () => {
   it('restaura la posición y las acciones tras un movimiento', () => {
     const e = new Engine(estado());
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     const activo = e.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     e.execute({ type: 'ActivarUnidad', unitId: activo });
 
@@ -57,7 +56,6 @@ describe('Deshacer una jugada', () => {
   it('tras deshacer se puede volver a mover, esta vez a otro sitio', () => {
     const e = new Engine(estado());
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     const activo = e.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     e.execute({ type: 'ActivarUnidad', unitId: activo });
 
@@ -75,12 +73,10 @@ describe('Deshacer una jugada', () => {
     const e = new Engine(estado());
     const antes = e.getState();
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     const primera = e.getState().ordenIniciativa;
 
     const deshecho = new Engine(antes, []);
     deshecho.execute({ type: 'TirarIniciativa' });
-    deshecho.execute({ type: 'ComenzarActivaciones' });
     expect(deshecho.getState().ordenIniciativa).toEqual(primera);
   });
 });

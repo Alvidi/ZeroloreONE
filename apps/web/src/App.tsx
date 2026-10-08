@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Engine, baseDistance, baseSolapaRect, type ActionKind, type GameEvent, type GameState, type PlayerId, type Vec2 } from '@zerolore/core';
+import { Engine, baseDistance, baseSolapaRect, hasCover, type ActionKind, type GameEvent, type GameState, type MeleeWeapon, type PlayerId, type RangedWeapon, type Unit, type Vec2 } from '@zerolore/core';
 import { Board, type MovePreview } from './Board.tsx';
 import { Dado } from './Dado.tsx';
 import { Combate, type CombateEnCurso } from './Combate.tsx';
 import { Ficha } from './Ficha.tsx';
-import { MenuUnidad } from './MenuUnidad.tsx';
 import { Hoja } from './Hoja.tsx';
-import { Rail } from './Rail.tsx';
+import { TiradaIniciativa } from './TiradaIniciativa.tsx';
+import { Compania } from './Compania.tsx';
+import { Prevision } from './Prevision.tsx';
 import { siguienteJugada } from './ia.ts';
-import { accionesDisponibles, objetivosDeCarga, objetivosDeDisparo } from './acciones.ts';
+import { accionesDisponibles, motivoNoActivable, objetivosDeCaC, objetivosDeCarga, objetivosDeDisparo } from './acciones.ts';
 import { puedeDesplegarEn } from '@zerolore/core';
 import { opcionesMovimiento } from './movimiento.ts';
-import { HABILIDADES_ACTIVAS, LISTA_A, LISTA_B, MESA, createGame } from './setup.ts';
+import { HABILIDADES_ARMA, HABILIDADES_UNIDAD, LISTA_A, LISTA_B, MESA, createGame } from './setup.ts';
 
 /**
  * Espera antes de abrir el pop-up de carga: lo que dura la animación de
@@ -59,6 +60,8 @@ function describe(e: GameEvent, state: GameState): string {
       return `${nombre(e.unitId)} destrabe: 1D6=${e.dado} ${e.exito ? '✔ libre' : '✘ atrapada'}`;
     case 'DanioAplicado': return `   ↳ ${nombre(e.unitId)} −${e.danio} (quedan ${e.vidasRestantes})`;
     case 'UnidadDestruida': return `   ☠ ${nombre(e.unitId)} destruida`;
+    case 'ExplosivaAlcanza':
+      return `   ✹ Explosiva: ${e.afectados.map(nombre).join(', ')} sufre${e.afectados.length > 1 ? 'n' : ''} ${e.danio}`;
     case 'UnidadRetirada': return `${e.unitId} se retira del campo de batalla`;
     case 'ActivacionTerminada': return `${nombre(e.unitId)} termina su activación`;
     case 'TurnoTerminado': return `— fin del turno ${e.turno} —`;
@@ -67,10 +70,26 @@ function describe(e: GameEvent, state: GameState): string {
   }
 }
 
+/**
+ * Semilla nueva para cada partida.
+ *
+ * El motor es determinista a propósito —la misma semilla da los mismos dados,
+ * y eso es lo que permite deshacer sin rebuscar tiradas—, pero la semilla de
+ * partida tiene que cambiar. Estaba fija en 2024, así que "Nueva partida"
+ * repetía siempre la misma partida con los mismos dados, y la iniciativa del
+ * primer turno la ganaba siempre el mismo bando.
+ *
+ * Se saca del generador criptográfico del navegador: aquí sí toca azar de
+ * verdad, porque es lo único que NO debe poder repetirse.
+ */
+function semillaAleatoria(): number {
+  return crypto.getRandomValues(new Uint32Array(1))[0]! % 2_147_483_647;
+}
+
 export function App() {
-  const [semilla, setSemilla] = useState(2024);
+  const [semilla, setSemilla] = useState(semillaAleatoria);
   const engineRef = useRef<Engine>(
-    new Engine(createGame(LISTA_A, LISTA_B, semilla), [], { habilidades: HABILIDADES_ACTIVAS }),
+    new Engine(createGame(LISTA_A, LISTA_B, semilla), [], { habilidadesArma: HABILIDADES_ARMA, habilidadesUnidad: HABILIDADES_UNIDAD }),
   );
   const [, forceRender] = useState(0);
   const refresh = useCallback(() => forceRender((n) => n + 1), []);
@@ -97,7 +116,6 @@ export function App() {
     alternar unidad por unidad empezando por quien ganó la tirada; en activaciones
     manda el motor, aquí no.
   */
-  const [turnoDespliegue, setTurnoDespliegue] = useState<string | null>(null);
   /** Qué bandos lleva la máquina. Con los dos puestos, la partida se juega sola. */
   const [ia, setIa] = useState<Record<string, boolean>>({ A: false, B: true });
   /** Hoja abierta encima del tablero, si hay alguna. */
@@ -152,15 +170,22 @@ export function App() {
   const deshacer = (): void => {
     const previo = historialRef.current.pop();
     if (!previo) return;
-    engineRef.current = new Engine(previo.state, previo.log, { habilidades: HABILIDADES_ACTIVAS });
+    engineRef.current = new Engine(previo.state, previo.log, { habilidadesArma: HABILIDADES_ARMA, habilidadesUnidad: HABILIDADES_UNIDAD });
     setAviso(null);
     setObjetivo(null);
     refresh();
   };
 
-  const nuevaPartida = (): void => {
-    engineRef.current = new Engine(createGame(LISTA_A, LISTA_B, semilla), [], {
-      habilidades: HABILIDADES_ACTIVAS,
+  /**
+   * `repetir` vuelve a jugar con la misma semilla —útil para reproducir una
+   * partida concreta—; sin él, cada partida nueva estrena semilla.
+   */
+  const nuevaPartida = (repetir = false): void => {
+    const semillaDeEsta = repetir ? semilla : semillaAleatoria();
+    setSemilla(semillaDeEsta);
+    engineRef.current = new Engine(createGame(LISTA_A, LISTA_B, semillaDeEsta), [], {
+      habilidadesArma: HABILIDADES_ARMA,
+      habilidadesUnidad: HABILIDADES_UNIDAD,
     });
     historialRef.current = [];
     setConfirmadoHasta(0);
@@ -182,7 +207,6 @@ export function App() {
       const ev = r.events.find((e) => e.type === 'IniciativaTirada');
       if (ev && ev.type === 'IniciativaTirada') {
         setIniciativa({ tiradas: ev.tiradas, orden: ev.orden });
-        setTurnoDespliegue(ev.orden[0] ?? null);
       }
     }
     refresh();
@@ -253,8 +277,8 @@ export function App() {
       ? (objetivosPorArma[armaElegida] ?? [])
       : accionElegida === 'Cargar' && unidadSel && perfilSel
         ? objetivosDeCarga(state, unidadSel, perfilSel)
-        : accionElegida === 'AtacarCaC' && unidadSel
-          ? [...unidadSel.trabadaCon]
+        : accionElegida === 'AtacarCaC' && unidadSel && perfilSel
+          ? objetivosDeCaC(state, unidadSel, perfilSel)
           : [];
 
   /*
@@ -465,6 +489,20 @@ export function App() {
    * puntería — si solo hay un objetivo posible, queda ya marcado.
    */
   const elegirAccion = (kind: ActionKind | null): void => {
+    /*
+      La activación la dispara la propia acción: no hay botón de activar. Se
+      hace aquí, antes de nada, porque el motor sigue exigiéndola —el orden de
+      activaciones es una regla— y así deja de ser un paso que dar a mano.
+    */
+    if (kind && unidadSel && state.unidadActiva !== unidadSel.id) {
+      if (!run({ type: 'ActivarUnidad', unitId: unidadSel.id })) return;
+    }
+    if (kind === 'Destrabarse' && activa) {
+      // Sin objetivo que elegir: se tira y ya está, sin cuadro de por medio.
+      resolverDestrabe(activa);
+      return;
+    }
+
     setAccionElegida(kind);
     setArmaElegida(null);
     setObjetivo(null);
@@ -488,7 +526,9 @@ export function App() {
     if (kind === 'AtacarCaC') {
       const candidatos = unidadSel.ataqueGratuitoContra
         ? [unidadSel.ataqueGratuitoContra]
-        : unidadSel.trabadaCon;
+        : perfilSel
+          ? objetivosDeCaC(state, unidadSel, perfilSel)
+          : [];
       if (candidatos.length === 1) setObjetivo(candidatos[0]!);
     }
   };
@@ -508,6 +548,11 @@ export function App() {
   const onClickUnidad = (id: string): void => {
     const u = state.units[id];
     if (!u) return;
+    /*
+      Mientras no haya hecho nada, cambiar de unidad es gratis: se deselecciona
+      y punto. En cuanto ejecuta una acción queda activada y ya no se suelta
+      hasta que termine.
+    */
     if (activa) {
       // Apuntando: tocar un enemigo marcado resuelve el disparo.
       // Apuntando: tocar un enemigo lo marca como objetivo. La acción se
@@ -554,30 +599,11 @@ export function App() {
     distanciaDeshacer?.type === 'UnidadMovida' ? distanciaDeshacer.desde : null;
 
   /*
-    Mientras no haya orden de Iniciativa —partida nueva, o turno recién
-    empezado— no le toca a nadie: primero se tira. Sin esto la partida nueva
-    heredaba el "juega AZUL" de la anterior.
+    De quién es la vez AHORA MISMO. Lo dice el motor, y vale igual para el
+    despliegue inicial que para las activaciones: desplegar es una jugada más.
+    Es el dato que tiñe toda la interfaz.
   */
-  const sinIniciativa = state.ordenIniciativa.length === 0;
-  const primeroEnDesplegar = state.ordenIniciativa[0] ?? null;
-  useEffect(() => {
-    /*
-      Se reconstruye a partir del orden de Iniciativa en vez de fiarlo todo a
-      quien lo puso: si el componente se rehace a mitad de turno, sin esto se
-      quedaba en nulo para siempre y la partida no avanzaba.
-    */
-    setTurnoDespliegue((actual) => {
-      if (sinIniciativa) return null;
-      return actual ?? primeroEnDesplegar;
-    });
-  }, [sinIniciativa, primeroEnDesplegar, state.turno]);
-
-  /*
-    De quién es el turno AHORA MISMO. En activaciones lo dice el motor; durante
-    la Fase de Iniciativa manda el relevo del despliegue. Es el dato que tiñe
-    toda la interfaz: jugando en local es lo único que evita perderse.
-  */
-  const jugadorDeTurno = state.fase === 'Activaciones' ? state.jugadorActivo : turnoDespliegue;
+  const jugadorDeTurno = state.jugadorActivo;
   const COLOR_TURNO: Record<string, string> = { A: '#3b82f6', B: '#ef4444' };
   const colorTurno = jugadorDeTurno ? (COLOR_TURNO[jugadorDeTurno] ?? '#64748b') : '#64748b';
 
@@ -586,21 +612,29 @@ export function App() {
     ? state.reserva.filter((r) => r.owner === jugadorDeTurno)
     : [];
 
-  /** Pasa el testigo al rival si todavía tiene algo que desplegar. */
-  const relevarDespliegue = (): void => {
-    const otro = state.jugadores.find((j) => j !== turnoDespliegue);
-    if (otro && state.reserva.some((r) => r.owner === otro)) setTurnoDespliegue(otro);
-  };
-
   /*
     Bucle de la máquina: una jugada cada vez, con una pausa para poder seguirla
     con la vista. Cada jugada cambia el estado, el efecto se vuelve a disparar y
     encadena la siguiente; cuando no hay nada que hacer, se para solo.
   */
-  /** Ningún bando puede empezar a activar sin al menos una miniatura en mesa. */
-  const todosConTropas = state.jugadores.every((j) =>
-    Object.values(state.units).some((u) => u.owner === j && u.vidas > 0),
-  );
+  /*
+    Cuándo se puede sacar algo de Reserva. En el despliegue inicial, siempre que
+    sea tu vez. Ya en partida, desplegar consume la vez igual que una activación:
+    solo vale si no tienes ninguna unidad a medias y te quedan refuerzos, que
+    son tantos por turno como puestos controles.
+  */
+  const puedeDesplegarAhora = ((): boolean => {
+    if (!jugadorDeTurno) return false;
+    if (state.fase === 'Despliegue') return true;
+    if (state.fase !== 'Activaciones' || state.unidadActiva) return false;
+    const tope = state.puestos.filter((pm) => pm.duenio === jugadorDeTurno).length;
+    return (state.refuerzosUsados[jugadorDeTurno] ?? 0) < tope;
+  })();
+
+  /** Nadie puede plantarse en el despliegue sin haber sacado nada a la mesa. */
+  const tieneTropas =
+    !!jugadorDeTurno &&
+    Object.values(state.units).some((u) => u.owner === jugadorDeTurno && u.vidas > 0);
 
   /*
     Fin de turno y tirada de Iniciativa van solos: no hay nada que decidir en
@@ -614,7 +648,7 @@ export function App() {
       const t = setTimeout(() => run({ type: 'TerminarTurno' }), MS_FIN_DE_TURNO);
       return () => clearTimeout(t);
     }
-    if (state.fase === 'Iniciativa' && state.ordenIniciativa.length === 0) {
+    if (state.ordenIniciativa.length === 0) {
       const t = setTimeout(tirarIniciativa, MS_TIRAR_INICIATIVA);
       return () => clearTimeout(t);
     }
@@ -629,7 +663,8 @@ export function App() {
   */
   const sinNadaQueHacer =
     !!unidadSel &&
-    unidadSel.activated &&
+    // Ojo: `activated` es "ya terminó", no "está jugando"; ponerlo aquí hacía
+    // la condición imposible y la activación no se cerraba sola nunca.
     unidadSel.vidas > 0 &&
     state.fase === 'Activaciones' &&
     state.unidadActiva === unidadSel.id &&
@@ -651,32 +686,13 @@ export function App() {
   const ambasIA = state.jugadores.every((j) => ia[j]);
   useEffect(() => {
     const jugarSolo = (): void => {
-      if (state.fase === 'Iniciativa') {
-        if (state.ordenIniciativa.length === 0) return; // la tirada va sola
-        if (!turnoDespliegue || !ia[turnoDespliegue]) return;
-        const jugada = siguienteJugada(state, turnoDespliegue);
-        if (jugada) {
-          run(jugada.cmd);
-          relevarDespliegue();
-          return;
-        }
-        relevarDespliegue();
-        /*
-          Nadie tiene ya nada que sacar: si la partida se juega sola, hay que
-          abrir las activaciones o se queda parada en la Fase de Iniciativa.
-        */
-        const quedanRefuerzos = state.jugadores.some(
-          (j) => ia[j] && siguienteJugada(state, j) !== null,
-        );
-        if (ambasIA && !quedanRefuerzos && todosConTropas) {
-          run({ type: 'ComenzarActivaciones' });
-          setIniciativa(null);
-        }
-        return;
-      }
-      if (state.fase !== 'Activaciones') return;
+      // La tirada de Iniciativa va sola; hasta que caiga, no le toca a nadie.
+      if (state.ordenIniciativa.length === 0) return;
+      if (state.fase !== 'Despliegue' && state.fase !== 'Activaciones') return;
+
       const jugador = state.jugadorActivo;
       if (!jugador || !ia[jugador]) return;
+
       const jugada = siguienteJugada(state, jugador);
       if (!jugada) {
         if (state.unidadActiva) run({ type: 'TerminarActivacion', unitId: state.unidadActiva });
@@ -691,7 +707,7 @@ export function App() {
     const t = setTimeout(jugarSolo, MS_JUGADA_IA);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, ia, turnoDespliegue, ambasIA, combate, tirada]);
+  }, [state, ia, combate, tirada]);
 
 
   /*
@@ -708,67 +724,81 @@ export function App() {
       }
     : null;
 
-  /** Acciones de la unidad seleccionada; se pintan junto a ella en el tablero. */
-  const menuUnidad = unidadSel && perfilSel && unidadSel.vidas > 0 ? (
-    <MenuUnidad
-      state={state}
-      unidad={unidadSel}
-      perfil={perfilSel}
-      onActivar={() => run({ type: 'ActivarUnidad', unitId: unidadSel.id })}
-      onTerminar={() => { run({ type: 'TerminarActivacion', unitId: unidadSel.id }); setObjetivo(null); }}
-      onCerrar={() => { setSeleccionada(null); setObjetivo(null); }}
-      onDeshacerMovimiento={ultimoFueMovimientoDeEsta ? deshacer : undefined}
-      onConfirmarPosicion={
-        ultimoFueMovimientoDeEsta ? () => setConfirmadoHasta(historialRef.current.length) : undefined
-      }
-      distanciaDeshacer={
-        distanciaDeshacer?.type === 'UnidadMovida' ? distanciaDeshacer.distancia : undefined
-      }
-      acciones={acciones}
-      accionElegida={accionElegida}
-      onElegirAccion={elegirAccion}
-      onResaltarAccion={setAccionResaltada}
-      anclaje={anclajeMenu}
-      armaElegida={armaElegida}
-      onElegirArma={setArmaElegida}
-      objetivosPorArma={objetivosPorArma}
-      objetivoElegido={objetivo}
-      onDisparar={() =>
-        activa && objetivo && armaElegida && resolverDisparo(activa, objetivo, armaElegida)
-      }
-      onCargar={() => activa && objetivo && resolverCarga(activa, objetivo)}
-      onDestrabarse={() => activa && resolverDestrabe(activa)}
-      onAtacarCaC={() => {
-        const arma = perfilSel.armas.find((w) => w.kind === 'cuerpo_a_cuerpo');
-        if (activa && objetivo && arma) resolverCaC(activa, objetivo, arma.nombre);
-      }}
-    />
-  ) : null;
+  /*
+    Ya no hay panel de acciones: la rueda, los objetivos marcados y el ✓ junto
+    al objetivo lo cubren todo. Cada cuadro de texto que quitamos es un sitio
+    menos donde mirar mientras juegas.
+  */
+  const conRueda =
+    !!unidadSel &&
+    !accionElegida &&
+    (state.unidadActiva === unidadSel.id || motivoNoActivable(state, unidadSel) === null);
 
   /*
-    Botón principal de la fase. Siempre el mismo sitio, siempre una sola cosa
-    que hacer: es lo que permite jugar esto igual con ratón que con el pulgar.
+    El ataque apuntado: quién, contra quién, con qué arma y si le tapa algo.
+    De aquí salen tanto el ✓ junto al objetivo como la previsión de la banda,
+    y así no pueden decir cosas distintas.
+  */
+  const ataqueApuntado = ((): {
+    atacante: Unit;
+    objetivo: Unit;
+    arma: RangedWeapon | MeleeWeapon;
+    enCobertura: boolean;
+    hacer: () => void;
+  } | null => {
+    if (!activa || !objetivo || !accionElegida || !unidadSel || !perfilSel) return null;
+    const obj = state.units[objetivo];
+    const po = obj ? state.profiles[obj.profileId] : undefined;
+    if (!obj || !po) return null;
+
+    const arma =
+      accionElegida === 'Disparar'
+        ? perfilSel.armas.find((w) => w.kind === 'disparo' && w.nombre === armaElegida)
+        : accionElegida === 'Cargar' || accionElegida === 'AtacarCaC'
+          ? perfilSel.armas.find((w) => w.kind === 'cuerpo_a_cuerpo')
+          : undefined;
+    if (!arma) return null;
+
+    /*
+      Cargando todavía no sabes desde dónde acabarás pegando —el motor busca el
+      hueco libre al llegar—, así que la cobertura de la posición actual no
+      vale: se prevé el cuerpo a cuerpo sin ella.
+    */
+    const enCobertura =
+      accionElegida === 'Cargar' ? false : hasCover(state, unidadSel, perfilSel, obj, po);
+
+    return {
+      atacante: unidadSel,
+      objetivo: obj,
+      arma,
+      enCobertura,
+      hacer: () => {
+        if (accionElegida === 'Disparar') resolverDisparo(activa, objetivo, arma.nombre);
+        else if (accionElegida === 'Cargar') resolverCarga(activa, objetivo);
+        else resolverCaC(activa, objetivo, arma.nombre);
+      },
+    };
+  })();
+
+  /*
+    Ya no hay botón de "empezar": el turno arranca solo. Lo único que queda por
+    decidir en el despliegue inicial es cuándo dejas de colocar, y para eso hace
+    falta decirlo. En cuanto los dos lo dicen, empieza la partida sola.
   */
   const accionDeFase =
-    state.fase === 'Iniciativa' && state.ordenIniciativa.length > 0
+    state.fase === 'Despliegue' && jugadorDeTurno && !ia[jugadorDeTurno] && tieneTropas
       ? {
-          texto: 'Comenzar activaciones',
-          desactivado: !todosConTropas,
-          hacer: () => { setRefuerzo(null); run({ type: 'ComenzarActivaciones' }); setIniciativa(null); },
+          texto: 'No despliego más',
+          desactivado: false,
+          hacer: () => {
+            setRefuerzo(null);
+            run({ type: 'PasarDespliegue', jugador: jugadorDeTurno });
+          },
         }
       : null;
 
   return (
     <div className={`app turno-${jugadorDeTurno ?? "nadie"}`} style={{ ["--turno" as string]: colorTurno }}>
-      <Rail
-        jugador="A"
-        state={state}
-        deTurno={jugadorDeTurno === 'A'}
-        enDespliegue={state.fase === 'Iniciativa'}
-        refuerzo={refuerzo}
-        onElegirRefuerzo={setRefuerzo}
-        unidad={unidadSel?.owner === 'A' ? unidadSel : null}
-      />
       <div className="board-wrap">
         <Board
           state={state}
@@ -792,82 +822,153 @@ export function App() {
           objetivoElegido={objetivo}
           origenAuras={origenAuras}
           apuntandoDisparo={accionElegida === 'Disparar'}
+          /*
+            La rueda sale con la unidad activada y sin acción elegida: en cuanto
+            eliges una, manda el tablero (anillos, objetivos) y la rueda estorba.
+          */
+          accionesRueda={
+            /*
+              `activated` significa "ya jugó este turno" (el zZ), no "está
+              jugando ahora": lo que manda es ser la unidad activa del motor.
+            */
+            conRueda ? acciones : null
+          }
+          accionResaltada={accionResaltada}
+          onElegirAccion={elegirAccion}
+          onResaltarAccion={setAccionResaltada}
+          /*
+            Disparar, Cargar y Atacar se rematan con un ✓ junto al objetivo, no
+            con un botón en un cuadro: es la misma confirmación, sin texto.
+          */
+          confirmarSobreObjetivo={
+            ataqueApuntado ? { unitId: ataqueApuntado.objetivo.id, hacer: ataqueApuntado.hacer } : null
+          }
+          confirmacionMovimiento={
+            ultimoFueMovimientoDeEsta
+              ? {
+                  onAceptar: () => setConfirmadoHasta(historialRef.current.length),
+                  onDeshacer: deshacer,
+                }
+              : null
+          }
+          onTerminarActivacion={() => {
+            if (unidadSel) {
+              run({ type: 'TerminarActivacion', unitId: unidadSel.id });
+              setObjetivo(null);
+            }
+          }}
           desplegando={state.reserva.find((r) => r.id === refuerzo) ?? null}
           onDesplegar={(puestoId, posicion) => {
+            // El motor pasa la vez solo: desplegar consume la jugada.
             if (refuerzo && run({ type: 'Desplegar', unitId: refuerzo, puestoId, posicion })) {
               setRefuerzo(null);
-              relevarDespliegue();
             }
           }}
           onCancelarAccion={() => { setAccionElegida(null); setArmaElegida(null); }}
           previewMovimiento={previewMovimiento}
         />
-        {menuUnidad}
         {aviso && <div className="aviso" onClick={() => setAviso(null)}>{aviso}</div>}
       </div>
-      <Rail
-        jugador="B"
-        state={state}
-        deTurno={jugadorDeTurno === 'B'}
-        enDespliegue={state.fase === 'Iniciativa'}
-        refuerzo={refuerzo}
-        onElegirRefuerzo={setRefuerzo}
-        unidad={unidadSel?.owner === 'B' ? unidadSel : null}
-      />
+      {/*
+        Banda de compañía: TU lista y, al lado, lo que estés mirando —la ficha
+        de la unidad, o la previsión si ya has marcado a quién atacar—.
+
+        Solo va la tuya. El enemigo se mira en la mesa, y cuando apuntas sale
+        entero en la previsión: tener su lista aquí abajo era pedirle al jugador
+        que llevara la contabilidad de un bando que no juega. Cuando haya online
+        esto seguirá valiendo: cada uno ve la suya.
+      */}
+      <footer className="banda">
+        <Compania
+          jugador="A"
+          state={state}
+          deTurno={jugadorDeTurno === 'A'}
+          seleccionada={seleccionada}
+          onSeleccionar={onClickUnidad}
+          puedeDesplegar={puedeDesplegarAhora}
+          refuerzo={refuerzo}
+          onElegirRefuerzo={setRefuerzo}
+          esMaquina={ia.A ?? false}
+        />
+
+        <div className="banda-centro">
+          {ataqueApuntado ? (
+            <Prevision
+              state={state}
+              atacante={ataqueApuntado.atacante}
+              objetivo={ataqueApuntado.objetivo}
+              arma={ataqueApuntado.arma}
+              enCobertura={ataqueApuntado.enCobertura}
+              onConfirmar={ataqueApuntado.hacer}
+              onCancelar={() => { setAccionElegida(null); setArmaElegida(null); setObjetivo(null); }}
+            />
+          ) : (
+            <Ficha state={state} unidad={unidadSel} />
+          )}
+        </div>
+
+      </footer>
 
       {/*
         Marcador: cada bando en su lado, con sus puntos, y el bando al que le
         toca encendido. Jugando en local es lo que evita perderse.
       */}
       <header className="marcador">
-        {state.jugadores.map((jug) => (
-          <div
-            key={jug}
-            className={`equipo p${jug} ${jugadorDeTurno === jug ? 'juega' : ''} ${jug === 'B' ? 'derecha' : ''}`}
-          >
-            <span className="nombre">{jug === 'A' ? 'AZUL' : 'ROJO'}</span>
-            <b className="puntos">{state.puntos[jug] ?? 0}</b>
-            <span className="ud">pts</span>
-            {ia[jug] && <span className="maquina" title="Lo lleva la máquina">CPU</span>}
-            {jugadorDeTurno === jug && <span className="chapa">juega</span>}
+        {/*
+          Un solo bloque en el centro. Repartir el tanteo por las dos esquinas
+          valía para dos jugadores en la misma pantalla, cada uno mirando a su
+          lado; jugando solo obliga a barrer la pantalla entera para saber cómo
+          va la cosa.
+        */}
+        <div className="tanteo">
+          <div className={`equipo pA ${jugadorDeTurno === 'A' ? 'juega' : ''}`}>
+            <span className="nombre">AZUL</span>
+            <b className="puntos">{state.puntos.A ?? 0}</b>
+            {ia.A && <span className="maquina" title="Lo lleva la máquina">CPU</span>}
           </div>
-        ))}
-        <div className="centro">
-          <span className="turno">Turno {state.turno}</span>
-          <span className="fase">{state.fase}</span>
-          {accionDeFase && (
-            <button
-              className="hud-boton"
-              disabled={'desactivado' in accionDeFase && accionDeFase.desactivado}
-              title={
-                'desactivado' in accionDeFase && accionDeFase.desactivado
-                  ? 'Cada bando necesita al menos una unidad en mesa'
-                  : undefined
-              }
-              onClick={accionDeFase.hacer}
-            >
-              {accionDeFase.texto}
-            </button>
-          )}
-          <button className="hud-boton icono" onClick={() => setHoja('partida')} title="Partida">⚙</button>
+
+          <div className="centro">
+            <span className="turno">Turno {state.turno}<i>/{state.turnosTotales}</i></span>
+            <span className="fase">{state.fase}</span>
+          </div>
+
+          <div className={`equipo pB derecha ${jugadorDeTurno === 'B' ? 'juega' : ''}`}>
+            {ia.B && <span className="maquina" title="Lo lleva la máquina">CPU</span>}
+            <b className="puntos">{state.puntos.B ?? 0}</b>
+            <span className="nombre">ROJO</span>
+          </div>
         </div>
+
+        {accionDeFase && (
+          <button
+            className="hud-boton accion-fase"
+            disabled={'desactivado' in accionDeFase && accionDeFase.desactivado}
+            title={
+              'desactivado' in accionDeFase && accionDeFase.desactivado
+                ? 'Cada bando necesita al menos una unidad en mesa'
+                : undefined
+            }
+            onClick={accionDeFase.hacer}
+          >
+            {accionDeFase.texto}
+          </button>
+        )}
+
+        {/* Los ajustes no son parte de la partida: se apartan a la esquina. */}
+        <button className="hud-boton icono ajustes" onClick={() => setHoja('partida')} title="Partida">⚙</button>
       </header>
 
       {/* --- Hojas: se abren, se leen y se cierran --- */}
 
       {iniciativa && (
-        <Hoja titulo="Iniciativa" subtitulo={`Empieza ${iniciativa.orden[0]}`} onCerrar={() => setIniciativa(null)}>
-          <div className="dados">
-            {iniciativa.orden.map((j) => (
-              <div key={j} className={`tirada p${j} ${j === iniciativa.orden[0] ? 'gana' : ''}`}>
-                <span className="jugador">Jugador {j}</span>
-                <Dado valor={iniciativa.tiradas[j] ?? 1} color={j === 'A' ? '#3b82f6' : '#ef4444'} />
-                {j === iniciativa.orden[0] && <span className="etiqueta">activa primero</span>}
-              </div>
-            ))}
-          </div>
-          <button className="grande" onClick={() => setIniciativa(null)}>Continuar</button>
-        </Hoja>
+        <TiradaIniciativa
+          // Una por turno: la clave hace que cada tirada ruede desde cero.
+          key={state.turno}
+          tiradas={iniciativa.tiradas}
+          orden={iniciativa.orden}
+          jugadores={state.jugadores}
+          onContinuar={() => setIniciativa(null)}
+        />
       )}
 
       {hoja === 'partida' && (
@@ -893,7 +994,12 @@ export function App() {
               reglas se sostienen.
             </p>
           </div>
-          <button className="grande" onClick={() => { nuevaPartida(); setHoja(null); }}>Nueva partida</button>
+          <div className="partida-botones">
+            <button className="grande" onClick={() => { nuevaPartida(); setHoja(null); }}>Nueva partida</button>
+            <button onClick={() => { nuevaPartida(true); setHoja(null); }} title="Misma semilla: mismos dados">
+              Repetir con esta semilla
+            </button>
+          </div>
         </Hoja>
       )}
 
@@ -919,7 +1025,7 @@ export function App() {
 
       {ganador && ganador.type === 'PartidaTerminada' && (
         <Hoja titulo="Partida terminada" subtitulo={`Gana ${ganador.ganador ?? 'nadie'}`}>
-          <button className="grande" onClick={nuevaPartida}>Nueva partida</button>
+          <button className="grande" onClick={() => nuevaPartida()}>Nueva partida</button>
         </Hoja>
       )}
 

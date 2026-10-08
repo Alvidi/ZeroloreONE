@@ -42,14 +42,20 @@ import {
 } from './types.ts';
 
 /** Distancia mínima a un enemigo fuera de la carga, en pulgadas. */
+/** Ataque suelto: se puede pegar a un enemigo a esta distancia sin trabarse. */
+const ALCANCE_CAC = 1;
+/** Con la habilidad Alcance, el ataque suelto llega hasta aquí. */
+const ALCANCE_SUELTO = 3;
 /** Carga: 3+ en 1D6. */
+/** Radio de la onda de Explosiva, en pulgadas desde la miniatura impactada. */
+const DISTANCIA_EXPLOSIVA = 3;
 const UMBRAL_CARGA = 3;
 /** Destrabarse: 4+ en 1D6. */
 const UMBRAL_DESTRABE = 4;
 
 export type Command =
   | { type: 'TirarIniciativa' }
-  | { type: 'ComenzarActivaciones' }
+  | { type: 'PasarDespliegue'; jugador: PlayerId }
   | { type: 'ActivarUnidad'; unitId: string }
   | { type: 'Mover'; unitId: string; destino: Vec2 }
   | { type: 'Desplegar'; unitId: string; puestoId: string; posicion: Vec2 }
@@ -81,11 +87,13 @@ export class Engine {
    * acción da el mismo resultado, y no se pueden "rebuscar" tiradas mejores.
    */
   /**
-   * `habilidades` enciende o apaga las habilidades de arma y de unidad. Se
-   * apagan para jugar solo con los perfiles mientras se afina el resto; el
-   * código sigue ahí y sus pruebas también, basta con volver a encenderlas.
+   * Las habilidades se encienden por separado: las de ARMA (Brutal, Perforante,
+   * Explosiva…) y las de UNIDAD (Guardia, Certero, Terror…). Así se puede
+   * jugar con unas mientras las otras se afinan. `habilidades` a secas fija
+   * las dos a la vez, que es lo que usaban las pruebas antiguas.
    */
-  private readonly habilidades: boolean;
+  private readonly habilidadesArma: boolean;
+  private readonly habilidadesUnidad: boolean;
   /*
     De quién era cada Cuartel General al empezar. Hace falta para la victoria
     inmediata de Guerra Total: "tomar el CG enemigo" es tomar uno que no fuera
@@ -96,12 +104,17 @@ export class Engine {
   constructor(
     initial: GameState,
     log: readonly GameEvent[] = [],
-    opciones: { habilidades?: boolean } = {},
+    opciones: {
+      habilidades?: boolean;
+      habilidadesArma?: boolean;
+      habilidadesUnidad?: boolean;
+    } = {},
   ) {
     this.state = initial;
     this.rng = Rng.restore(initial.rngState);
     this.log = [...log];
-    this.habilidades = opciones.habilidades ?? true;
+    this.habilidadesArma = opciones.habilidadesArma ?? opciones.habilidades ?? true;
+    this.habilidadesUnidad = opciones.habilidadesUnidad ?? opciones.habilidades ?? true;
     this.cuartelesIniciales = new Map(
       initial.puestos
         .filter((pm) => pm.esCuartelGeneral && pm.duenio !== null)
@@ -137,8 +150,8 @@ export class Engine {
 
   private dispatch(cmd: Command): CommandResult {
     switch (cmd.type) {
-      case 'ComenzarActivaciones':
-        return this.startActivations();
+      case 'PasarDespliegue':
+        return this.pasarDespliegue(cmd.jugador);
       case 'TirarIniciativa':
         return this.rollInitiative();
       case 'ActivarUnidad':
@@ -166,10 +179,12 @@ export class Engine {
 
   // ---------------------------------------------------------------- Iniciativa
 
-  /** Fase de Iniciativa: cada jugador tira 1D6, el más alto activa primero. */
+  /**
+   * Iniciativa: cada jugador tira 1D6 y el más alto abre. Se tira UNA vez en
+   * toda la partida, al empezar; a partir de ahí se alterna quién abre cada
+   * turno rotando el orden en el fin de turno.
+   */
   private rollInitiative(): CommandResult {
-    if (this.state.fase !== 'Iniciativa') return fail('No es la Fase de Iniciativa');
-    // Una tirada por turno: repetirla cambiaría el orden a mitad de despliegue.
     if (this.state.ordenIniciativa.length > 0) return fail('La Iniciativa ya está tirada');
 
     let tiradas: Record<PlayerId, number> = {};
@@ -203,13 +218,18 @@ export class Engine {
     }
 
     /*
-      La tirada NO abre todavía las activaciones: sigue siendo Fase de
-      Iniciativa, que es cuando entran los refuerzos desde Reserva empezando
-      por quien ganó la tirada. Las activaciones las abre `ComenzarActivaciones`.
+      La tirada deja la partida en Despliegue: quien ganó coloca primero y a
+      partir de ahí se alternan. Cuando los dos pasan, arranca el turno 1 sin
+      botón de por medio.
+
+      Si no hay nada en reserva —ejércitos ya puestos en mesa—, no hay nada que
+      desplegar y se entra directo a las activaciones.
     */
+    const hayQueDesplegar = this.state.reserva.length > 0;
     this.state = {
       ...this.state,
       units,
+      fase: hayQueDesplegar ? 'Despliegue' : 'Activaciones',
       ordenIniciativa: orden,
       jugadorActivo: orden[0] ?? null,
       unidadActiva: null,
@@ -283,7 +303,7 @@ export class Engine {
 
   /** Un arma con Multiuso permite disparar estando trabado. */
   private multiusoWeapon(u: Unit): RangedWeapon | null {
-    if (!this.habilidades) return null;
+    if (!this.habilidadesArma) return null;
     const p = this.profileOf(u);
     if (!p) return null;
     for (const w of p.armas) {
@@ -300,7 +320,7 @@ export class Engine {
 
   /** Nombre de la habilidad de unidad, para consultarla sin repetir código. */
   private habilidadDe(u: Unit): string | null {
-    if (!this.habilidades) return null;
+    if (!this.habilidadesUnidad) return null;
     return this.profileOf(u)?.habilidad?.nombre ?? null;
   }
 
@@ -325,7 +345,7 @@ export class Engine {
       precisionMejorada?: number;
       repetirFallos?: boolean;
       defensorBerserker?: boolean;
-    } = { habilidadesArma: this.habilidades, distancia, enCobertura };
+    } = { habilidadesArma: this.habilidadesArma, distancia, enCobertura };
 
     if (tipo === 'disparo') {
       // Certero y Emplazado premian quedarse quieto.
@@ -406,30 +426,143 @@ export class Engine {
     return this.cuartelesIniciales.get(pm.id) ?? null;
   }
 
+  /**
+   * Explosiva (X): si el objetivo sufre daño, hasta X miniaturas más a 3" de
+   * él sufren ese mismo daño directo, sin salvación.
+   *
+   * El reglamento deja que el atacante elija, aliadas o enemigas. Aquí se
+   * eligen solas y SOLO enemigas, de la más cercana a la más lejana: nadie
+   * elegiría meterle la metralla a los suyos, y así no hace falta preguntar a
+   * mitad de un disparo.
+   */
+  private alcanceExplosiva(atacanteId: string, impactadaId: string, maximo: number): string[] {
+    if (maximo <= 0 || !this.habilidadesArma) return [];
+    const atacante = this.unit(atacanteId);
+    const impactada = this.unit(impactadaId);
+    const pi = impactada ? this.profileOf(impactada) : undefined;
+    if (!atacante || !impactada || !pi) return [];
+
+    return Object.values(this.state.units)
+      .filter((o) => o.id !== impactadaId && o.id !== atacanteId && o.vidas > 0)
+      .filter((o) => o.owner !== atacante.owner)
+      .map((o) => {
+        const op = this.profileOf(o);
+        const d = op ? baseDistance(impactada.position, pi.radioPeana, o.position, op.radioPeana) : Infinity;
+        return { id: o.id, d };
+      })
+      .filter((x) => x.d <= DISTANCIA_EXPLOSIVA)
+      .sort((a, b) => a.d - b.d || a.id.localeCompare(b.id))
+      .slice(0, maximo)
+      .map((x) => x.id);
+  }
+
+  private aplicarExplosiva(
+    atacanteId: string,
+    impactadaId: string,
+    afectados: readonly string[],
+    danio: number,
+  ): GameEvent[] {
+    if (afectados.length === 0 || danio <= 0) return [];
+    const events: GameEvent[] = [
+      { type: 'ExplosivaAlcanza', attackerId: atacanteId, origenId: impactadaId, afectados, danio },
+    ];
+    for (const id of afectados) events.push(...this.applyDamage(id, danio, atacanteId));
+    return events;
+  }
+
   /** Cierra la ventana de refuerzos y abre las activaciones. */
-  private startActivations(): CommandResult {
-    if (this.state.fase !== 'Iniciativa') return fail('No es la Fase de Iniciativa');
-    if (this.state.ordenIniciativa.length === 0) return fail('Falta tirar Iniciativa');
-    this.state = { ...this.state, fase: 'Activaciones' };
-    return { ok: true, events: [] };
+  /**
+   * "Ya no despliego más" en el despliegue inicial. Cuando lo dicen todos,
+   * arranca el turno 1 solo: no hay botón de empezar.
+   */
+  private pasarDespliegue(player: PlayerId): CommandResult {
+    if (this.state.fase !== 'Despliegue') return fail('No es el despliegue inicial');
+    if (player !== this.state.jugadorActivo) {
+      return fail(`No es la vez de ${player}, juega ${this.state.jugadorActivo}`);
+    }
+    this.state = {
+      ...this.state,
+      desplieguePasado: { ...this.state.desplieguePasado, [player]: true },
+    };
+    return { ok: true, events: this.pasarVezDeDespliegue() };
+  }
+
+  /**
+   * Pasa la vez en el despliegue inicial, saltando a quien ya haya pasado o no
+   * tenga nada que sacar. Si no queda nadie, empieza la partida.
+   */
+  private pasarVezDeDespliegue(): GameEvent[] {
+    const puedeSeguir = (j: PlayerId): boolean =>
+      !this.state.desplieguePasado[j] && this.state.reserva.some((r) => r.owner === j);
+
+    const orden = this.state.ordenIniciativa;
+    const actual = this.state.jugadorActivo;
+    const desde = actual ? orden.indexOf(actual) : -1;
+    for (let i = 1; i <= orden.length; i++) {
+      const candidato = orden[(desde + i + orden.length) % orden.length];
+      if (candidato && puedeSeguir(candidato)) {
+        this.state = { ...this.state, jugadorActivo: candidato };
+        return [];
+      }
+    }
+
+    // Nadie más va a desplegar: se abre el turno 1 sin preguntar.
+    this.state = {
+      ...this.state,
+      fase: 'Activaciones',
+      jugadorActivo: orden[0] ?? null,
+      unidadActiva: null,
+    };
+    return [{ type: 'TurnoIniciado', turno: this.state.turno }];
   }
 
   // ---------------------------------------------------------------- Refuerzos
 
+  /** Cuántos puestos de mando controla un jugador. Es su tope de refuerzos. */
+  private puestosControlados(player: PlayerId): number {
+    return this.state.puestos.filter((pm) => pm.duenio === player).length;
+  }
+
   /**
-   * Saca una unidad de la Reserva y la pone en mesa pegada a un puesto de
-   * mando. Es gratis y no gasta acciones: los refuerzos entran en la Fase de
-   * Iniciativa, antes de que nadie active.
+   * Saca una unidad de la Reserva y la pone en mesa sobre un puesto de mando.
+   *
+   * En el despliegue inicial es libre: colocas y le pasas la vez al rival. Ya
+   * en partida, meter un refuerzo **consume tu vez igual que una activación**,
+   * y cada turno puedes meter tantos como puestos controles.
    */
   private deploy(unitId: string, puestoId: string, posicion: Vec2): CommandResult {
-    if (this.state.fase !== 'Iniciativa') {
-      return fail('Los refuerzos solo entran en la Fase de Iniciativa');
+    const inicial = this.state.fase === 'Despliegue';
+    if (!inicial && this.state.fase !== 'Activaciones') {
+      return fail('No se puede desplegar ahora');
+    }
+    if (!inicial && this.state.unidadActiva) {
+      return fail(`Termina la activación de ${this.state.unidadActiva} antes de desplegar`);
     }
 
     const entrada = this.state.reserva.find((r) => r.id === unitId);
     if (!entrada) return fail(`La unidad ${unitId} no está en reserva`);
-    if (this.state.refuerzoUsado[entrada.owner]) {
-      return fail('Ya has metido tu refuerzo este turno');
+    if (entrada.owner !== this.state.jugadorActivo) {
+      return fail(`No es la vez de ${entrada.owner}, juega ${this.state.jugadorActivo}`);
+    }
+    if (inicial && this.state.desplieguePasado[entrada.owner]) {
+      return fail('Ya has dicho que no despliegas más');
+    }
+    if (!inicial) {
+      const tope = this.puestosControlados(entrada.owner);
+      const usados = this.state.refuerzosUsados[entrada.owner] ?? 0;
+      if (usados >= tope) {
+        return fail(`Solo puedes meter ${tope} refuerzo(s) por turno: uno por puesto que controles`);
+      }
+    }
+    /*
+      Reglamento, despliegue: "la primera unidad que debe desplegar cada jugador
+      es su Héroe". Mientras siga en reserva, no sale nadie más.
+    */
+    const heroePendiente = this.state.reserva.find(
+      (r) => r.owner === entrada.owner && this.state.profiles[r.profileId]?.clase === 'Heroe',
+    );
+    if (heroePendiente && heroePendiente.id !== entrada.id) {
+      return fail('El Héroe tiene que desplegarse primero');
     }
     const p = this.state.profiles[entrada.profileId];
     if (!p) return fail('Perfil no encontrado');
@@ -471,9 +604,21 @@ export class Engine {
       ...this.state,
       units: { ...this.state.units, [unidad.id]: unidad },
       reserva: this.state.reserva.filter((r) => r.id !== unitId),
-      refuerzoUsado: { ...this.state.refuerzoUsado, [entrada.owner]: true },
+      refuerzosUsados: inicial
+        ? this.state.refuerzosUsados
+        : {
+            ...this.state.refuerzosUsados,
+            [entrada.owner]: (this.state.refuerzosUsados[entrada.owner] ?? 0) + 1,
+          },
     };
-    return { ok: true, events: [{ type: 'UnidadDesplegada', unitId, puestoId, posicion }] };
+
+    const events: GameEvent[] = [{ type: 'UnidadDesplegada', unitId, puestoId, posicion }];
+    /*
+      Desplegar gasta la vez, así que después juega el rival. En el despliegue
+      inicial es lo mismo: se alterna unidad por unidad.
+    */
+    events.push(...(inicial ? this.pasarVezDeDespliegue() : this.pasarVez()));
+    return { ok: true, events };
   }
 
   private move(unitId: string, destino: Vec2, accion: 'Mover' | 'Correr'): CommandResult {
@@ -504,10 +649,22 @@ export class Engine {
       return fail(`Movimiento excedido: ${recorrido.toFixed(2)}" supera ${permitido}"`);
     }
 
-    // No se puede terminar a 1" o menos de un enemigo, salvo al Cargar.
-    const conflicto = this.enemyWithin(unitId, destino, p.radioPeana, ZONA_CONTROL);
+    /*
+      Moviendo solo está prohibido acabar en CONTACTO con un enemigo: a contacto
+      se llega únicamente cargando. Acercarse a 1" o menos sí vale, y es lo que
+      permite montar un ataque suelto para el turno siguiente.
+
+      Corriendo se mantiene la zona de 1": quien corre no puede plantarse encima
+      del enemigo.
+    */
+    const margen = accion === 'Correr' ? ZONA_CONTROL : 0;
+    const conflicto = this.enemyWithin(unitId, destino, p.radioPeana, margen);
     if (conflicto) {
-      return fail(`No se puede terminar a ${ZONA_CONTROL}" o menos del enemigo ${conflicto}`);
+      return fail(
+        margen === 0
+          ? `No se puede terminar el movimiento en contacto con el enemigo ${conflicto}`
+          : `Corriendo no se puede terminar a ${ZONA_CONTROL}" o menos del enemigo ${conflicto}`,
+      );
     }
 
     /*
@@ -589,7 +746,7 @@ export class Engine {
 
     // Atacante trabado: necesita Multiuso, salvo Vehículos y Monstruos.
     if (u.trabadaCon.length > 0 && !this.ignoraTrabado(u)) {
-      if (!this.habilidades || !hasAbility(arma.habilidades, 'Multiuso')) {
+      if (!this.habilidadesArma || !hasAbility(arma.habilidades, 'Multiuso')) {
         return fail('Trabada: solo se puede disparar con un arma con Multiuso');
       }
       if (!u.trabadaCon.includes(targetId)) {
@@ -613,13 +770,13 @@ export class Engine {
     if (distancia > arma.distancia) {
       return fail(`Fuera de alcance: ${distancia.toFixed(2)}" supera ${arma.distancia}"`);
     }
-    if (this.habilidades && anguloMuertoBloquea(arma, distancia)) {
+    if (this.habilidadesArma && anguloMuertoBloquea(arma, distancia)) {
       return fail(
         `Ángulo muerto: no puede disparar por debajo de ${(arma.distancia / 2).toFixed(1)}"`,
       );
     }
 
-    if (!this.habilidades || !hasAbility(arma.habilidades, 'Parabólica')) {
+    if (!this.habilidadesArma || !hasAbility(arma.habilidades, 'Parabólica')) {
       const los = lineOfSight(this.state, u, p, t, tp);
       if (!los.visible) return fail('Sin línea de visión al objetivo');
     }
@@ -635,7 +792,11 @@ export class Engine {
 
     const events: GameEvent[] = [this.spend(unitId, 'Disparar')];
     events.push({ type: 'DisparoResuelto', attackerId: unitId, targetId, arma: arma.nombre, resultado });
+    // La onda expansiva se decide antes de aplicar el daño: si el objetivo cae,
+    // sigue contando como la miniatura impactada a efectos de los 3".
+    const alcanzadas = this.alcanceExplosiva(unitId, targetId, resultado.explosivaObjetivos);
     events.push(...this.applyDamage(targetId, resultado.danioTotal, unitId));
+    events.push(...this.aplicarExplosiva(unitId, targetId, alcanzadas, resultado.danioTotal));
     if (resultado.danioRetroceso > 0) {
       events.push(...this.applyDamage(unitId, resultado.danioRetroceso));
     }
@@ -743,18 +904,29 @@ export class Engine {
       | undefined;
     if (!arma) return fail(`El arma de cuerpo a cuerpo "${armaNombre}" no está en el perfil`);
 
-    // Alcance permite golpear a cualquier enemigo a 3" o menos, trabado o no.
+    /*
+      Dos formas de pegarse, y ninguna traba salvo la carga:
+        - Trabado: se llegó por carga y siguen en contacto.
+        - Ataque suelto: el enemigo está a 1" o menos sin estar trabado. Ni el
+          atacante ni el objetivo quedan trabados, así que los dos siguen
+          libres de moverse o disparar en su activación.
+      Alcance amplía el suelto hasta 3", y tampoco traba.
+    */
     const distancia = baseDistance(u.position, p.radioPeana, t.position, tp.radioPeana);
-    const conAlcance = this.habilidades && hasAbility(arma.habilidades, 'Alcance');
+    const conAlcance = this.habilidadesArma && hasAbility(arma.habilidades, 'Alcance');
     if (!u.trabadaCon.includes(targetId)) {
-      if (!conAlcance) return fail('Solo se puede atacar a una unidad trabada');
-      if (distancia > 3) return fail(`Alcance: el objetivo está a ${distancia.toFixed(2)}", más de 3"`);
+      const suelto = conAlcance ? ALCANCE_SUELTO : ALCANCE_CAC;
+      if (distancia > suelto + 1e-9) {
+        return fail(
+          `El objetivo está a ${distancia.toFixed(2)}", más de ${suelto}": hay que estar trabado o a ${suelto}" o menos`,
+        );
+      }
     }
 
     const events: GameEvent[] = [this.spend(unitId, 'AtacarCaC')];
 
     // Barrido ataca a todas las unidades trabadas con esta, una por una.
-    const objetivos = this.habilidades && hasAbility(arma.habilidades, 'Barrido')
+    const objetivos = this.habilidadesArma && hasAbility(arma.habilidades, 'Barrido')
       ? [...new Set([targetId, ...u.trabadaCon])]
       : [targetId];
     if (objetivos.length > 1) {
@@ -775,7 +947,9 @@ export class Engine {
         this.contextoAtaque(u, o, d, cobertura, 'cac'),
       );
       events.push({ type: 'CaCResuelto', attackerId: unitId, targetId: oid, arma: arma.nombre, resultado });
+      const alcanzadasCaC = this.alcanceExplosiva(unitId, oid, resultado.explosivaObjetivos);
       events.push(...this.applyDamage(oid, resultado.danioTotal, unitId));
+      events.push(...this.aplicarExplosiva(unitId, oid, alcanzadasCaC, resultado.danioTotal));
       if (resultado.danioRetroceso > 0) {
         events.push(...this.applyDamage(unitId, resultado.danioRetroceso));
       }
@@ -876,21 +1050,25 @@ export class Engine {
     return { ok: true, events: this.finishActivation(unitId) };
   }
 
-  /** Cierra la activación y pasa el turno al siguiente jugador con unidades. */
+  /** Cierra la activación y pasa la vez. */
   private finishActivation(unitId: string): GameEvent[] {
     this.patchUnit(unitId, { activated: true, accionesRestantes: 0, ataqueGratuitoContra: null });
     this.state = { ...this.state, unidadActiva: null };
-    const events: GameEvent[] = [{ type: 'ActivacionTerminada', unitId }];
+    return [{ type: 'ActivacionTerminada', unitId }, ...this.pasarVez()];
+  }
 
+  /**
+   * Le pasa la vez al siguiente jugador que tenga algo que hacer. Si no queda
+   * nadie —ni unidades sin activar ni refuerzos que meter—, el turno termina.
+   */
+  private pasarVez(): GameEvent[] {
     const siguiente = this.nextPlayer();
     if (siguiente === null) {
-      // Todas las unidades activadas: fin de turno.
-      this.state = { ...this.state, fase: 'FinDeTurno', jugadorActivo: null };
-      events.push({ type: 'TurnoTerminado', turno: this.state.turno });
-    } else {
-      this.state = { ...this.state, jugadorActivo: siguiente };
+      this.state = { ...this.state, fase: 'FinDeTurno', jugadorActivo: null, unidadActiva: null };
+      return [{ type: 'TurnoTerminado', turno: this.state.turno }];
     }
-    return events;
+    this.state = { ...this.state, jugadorActivo: siguiente };
+    return [];
   }
 
   /**
@@ -908,10 +1086,25 @@ export class Engine {
     return null;
   }
 
+  /**
+   * ¿Le queda jugada a este jugador? Una unidad sin activar, o un refuerzo que
+   * meter: desplegar es una jugada más, así que mientras pueda hacerlo el turno
+   * no puede darse por acabado.
+   */
   private hasPendingUnits(player: PlayerId): boolean {
-    return Object.values(this.state.units).some(
+    const sinActivar = Object.values(this.state.units).some(
       (u) => u.owner === player && !u.activated && u.vidas > 0,
     );
+    if (sinActivar) return true;
+    return this.puedeReforzar(player);
+  }
+
+  /** Le quedan unidades en reserva y turnos de refuerzo por gastar. */
+  private puedeReforzar(player: PlayerId): boolean {
+    if (!this.state.reserva.some((r) => r.owner === player)) return false;
+    const usados = this.state.refuerzosUsados[player] ?? 0;
+    if (usados >= this.puestosControlados(player)) return false;
+    return this.state.puestos.some((pm) => puedeDesplegarEn(this.state, pm, player));
   }
 
   private endTurn(): CommandResult {
@@ -1011,18 +1204,38 @@ export class Engine {
       return { ok: true, events };
     }
 
+    /*
+      Ni fase de Iniciativa ni tirada nueva: la Iniciativa se tiró una sola vez
+      al empezar. Lo que se alterna es quién ABRE cada turno, y eso se consigue
+      rotando el orden.
+    */
+    const orden = [...this.state.ordenIniciativa.slice(1), ...this.state.ordenIniciativa.slice(0, 1)];
+    const unitsReiniciadas: Record<string, Unit> = {};
+    for (const [id, u] of Object.entries(units)) {
+      unitsReiniciadas[id] = {
+        ...u,
+        activated: false,
+        accionesRestantes: 0,
+        accionesUsadas: [],
+        seMovio: false,
+        corrio: false,
+        cargo: false,
+        ataqueGratuitoContra: null,
+      };
+    }
     this.state = {
       ...this.state,
-      units,
+      units: unitsReiniciadas,
       puestos,
       puntos,
       turno: nuevoTurno,
-      fase: 'Iniciativa',
-      refuerzoUsado: {},
-      ordenIniciativa: [],
-      jugadorActivo: null,
+      fase: 'Activaciones',
+      refuerzosUsados: {},
+      ordenIniciativa: orden,
+      jugadorActivo: orden[0] ?? null,
       unidadActiva: null,
     };
+    events.push({ type: 'TurnoIniciado', turno: nuevoTurno });
     return { ok: true, events };
   }
 

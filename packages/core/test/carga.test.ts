@@ -19,16 +19,15 @@ const unit = (id: string, owner: string, x: number, y: number): Unit => ({
 });
 
 const estado = (semilla: number): GameState => ({
-  mode: 'Escaramuza', turno: 1, fase: 'Iniciativa',
+  mode: 'Escaramuza', turno: 1, fase: 'Despliegue',
   jugadores: ['A', 'B'], ordenIniciativa: [], jugadorActivo: null, unidadActiva: null,
   units: { a1: unit('a1', 'A', 10, 10), b1: unit('b1', 'B', 10, 15) },
-  profiles: { p: perfil }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: semilla,
+  profiles: { p: perfil }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: semilla,
 });
 
 /** Activa a la unidad que le toque y devuelve su id. */
 function activarPrimera(e: Engine): string {
   e.execute({ type: 'TirarIniciativa' });
-  e.execute({ type: 'ComenzarActivaciones' });
   const s = e.getState();
   const u = Object.values(s.units).find((x) => x.owner === s.jugadorActivo)!;
   e.execute({ type: 'ActivarUnidad', unitId: u.id });

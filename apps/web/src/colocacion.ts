@@ -7,6 +7,7 @@ import {
   expulsarDeRect,
   imantarARect,
   recortarCamino,
+  ZONA_CONTROL,
   type Puesto,
   type Terrain,
   type Vec2,
@@ -29,8 +30,16 @@ export interface OpcionesColocacion {
   readonly terreno: readonly Terrain[];
   /** Puestos de mando: si acabas dentro de uno, te imanta para que lo ocupes. */
   readonly puestos: readonly Puesto[];
-  /** Las demás miniaturas en mesa: no se puede acabar encima de ninguna. */
-  readonly unidades: readonly { readonly centro: Vec2; readonly radio: number }[];
+  /**
+   * Las demás miniaturas en mesa. Con las propias basta con no solaparse; con
+   * las enemigas hay que quedarse fuera de su zona de control, así que llevan
+   * `margen` = ZONA_CONTROL.
+   */
+  readonly unidades: readonly {
+    readonly centro: Vec2;
+    readonly radio: number;
+    readonly margen: number;
+  }[];
   /** A cuántas pulgadas atrae la cobertura. */
   readonly iman: number;
 }
@@ -53,17 +62,28 @@ export function caminoHasta(
   return camino ? camino.puntos : [origen, destino];
 }
 
-/** Las demás miniaturas vivas, en la forma que espera `destinoDeMovimiento`. */
+/**
+ * Las demás miniaturas vivas, en la forma que espera `destinoDeMovimiento`.
+ *
+ * Moviendo, a las enemigas solo se les respeta la peana: acabar a 1\" o menos es
+ * legal, y es lo que deja montada la unidad para un ataque suelto. Corriendo sí
+ * se les guarda la zona de control entera.
+ */
 export function otrasUnidades(
-  state: { units: Record<string, { id: string; profileId: string; position: Vec2; vidas: number }>;
+  state: { units: Record<string, { id: string; owner: string; profileId: string; position: Vec2; vidas: number }>;
            profiles: Record<string, { radioPeana: number }> },
   excluir: string,
-): { centro: Vec2; radio: number }[] {
+  correr = false,
+): { centro: Vec2; radio: number; margen: number }[] {
+  const propio = state.units[excluir]?.owner;
   return Object.values(state.units)
     .filter((u) => u.id !== excluir && u.vidas > 0)
     .flatMap((u) => {
       const perfil = state.profiles[u.profileId];
-      return perfil ? [{ centro: u.position, radio: perfil.radioPeana }] : [];
+      if (!perfil) return [];
+      const enemiga = propio !== undefined && u.owner !== propio;
+      const margen = enemiga && correr ? ZONA_CONTROL : 0;
+      return [{ centro: u.position, radio: perfil.radioPeana, margen }];
     });
 }
 
@@ -109,9 +129,9 @@ export function destinoDeMovimiento(o: OpcionesColocacion): Vec2 {
     aparta lo justo para quedar en contacto, y se recorta otra vez por si el
     empujón la mandó al otro lado de un muro.
   */
-  for (let intento = 0; intento < 3; intento += 1) {
+  for (let intento = 0; intento < 8; intento += 1) {
     const encima = o.unidades.find(
-      (u) => centerDistance(p, u.centro) < u.radio + o.radio - 1e-9,
+      (u) => centerDistance(p, u.centro) < u.radio + o.radio + u.margen - 1e-9,
     );
     if (!encima) break;
     p = recortar(dentroDeLaMesa(o, apartarDe(p, o.radio, encima)));
@@ -138,16 +158,20 @@ export function destinoDeMovimiento(o: OpcionesColocacion): Vec2 {
   return p;
 }
 
-/** Saca la peana justo hasta quedar en contacto con la otra, sin solaparse. */
+/**
+ * Aparta la peana de otra miniatura: hasta el contacto si es propia, hasta
+ * dejar libre su zona de control si es enemiga. Un pelo más allá del límite,
+ * para que el redondeo no la deje justo en la raya y el motor la rechace.
+ */
 function apartarDe(
   p: Vec2,
   radio: number,
-  otra: { readonly centro: Vec2; readonly radio: number },
+  otra: { readonly centro: Vec2; readonly radio: number; readonly margen: number },
 ): Vec2 {
   const dx = p.x - otra.centro.x;
   const dy = p.y - otra.centro.y;
   const d = Math.hypot(dx, dy);
-  const fuera = otra.radio + radio;
+  const fuera = otra.radio + radio + otra.margen + (otra.margen > 0 ? 0.01 : 0);
   if (d < 1e-9) return { x: otra.centro.x, y: otra.centro.y + fuera };
   return { x: otra.centro.x + (dx / d) * fuera, y: otra.centro.y + (dy / d) * fuera };
 }

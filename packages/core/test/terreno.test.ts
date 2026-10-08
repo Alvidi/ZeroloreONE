@@ -22,7 +22,7 @@ const unit = (id: string, owner: string, x: number, y: number): Unit => ({
 const estado = (terrain: Terrain[], units: Record<string, Unit>): GameState => ({
   mode: 'Escaramuza', turno: 1, fase: 'Activaciones',
   jugadores: ['A', 'B'], ordenIniciativa: ['A', 'B'], jugadorActivo: 'A',
-  unidadActiva: 'a1', units, profiles: { p: perfil }, terrain, puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: 5,
+  unidadActiva: 'a1', units, profiles: { p: perfil }, terrain, puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: 5,
 });
 
 const muro = (tipo: TipoTerreno): Terrain => ({

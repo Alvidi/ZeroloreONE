@@ -28,7 +28,6 @@ function partidaAutomatica(semilla: number, topePasos = 4000) {
         engine.execute(jugada.cmd);
         continue;
       }
-      engine.execute({ type: 'ComenzarActivaciones' });
       continue;
     }
 
@@ -70,6 +69,17 @@ describe('IA: decisiones sueltas', () => {
     // En Iniciativa ambos pueden desplegar; en Activaciones solo el activo.
     engine.execute({ type: 'Desplegar', ...primerDespliegue(engine) });
     expect(siguienteJugada(engine.getState(), quieto)).not.toBeNull();
+  });
+
+  it('lo primero que despliega es su Héroe', () => {
+    const engine = new Engine(createGame(LISTA_A, LISTA_B, 3), [], { habilidades: false });
+    engine.execute({ type: 'TirarIniciativa' });
+    const s = engine.getState();
+    const jugada = siguienteJugada(s, 'B');
+    expect(jugada?.cmd.type).toBe('Desplegar');
+    if (jugada?.cmd.type !== 'Desplegar') return;
+    const entrada = s.reserva.find((r) => r.id === (jugada.cmd as { unitId: string }).unitId)!;
+    expect(s.profiles[entrada.profileId]?.clase).toBe('Heroe');
   });
 
   it('despliega desde la reserva por un puesto propio', () => {
@@ -128,7 +138,7 @@ describe('IA: juega a los puntos', () => {
       caro: perfil({ id: 'caro', valor: caro.valor }),
       barato: perfil({ id: 'barato', valor: barato.valor }),
     },
-    terrain: [], puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: 4,
+    terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: 4,
   });
 
   it('remata al que puede tumbar aunque valga menos', () => {
@@ -150,6 +160,90 @@ describe('IA: juega a los puntos', () => {
     const jugada = siguienteJugada(escena({ vidas: 8, valor: 9 }, { vidas: 8, valor: 2 }), 'A');
     expect(jugada?.cmd.type).toBe('Disparar');
     if (jugada?.cmd.type === 'Disparar') expect(jugada.cmd.targetId).toBe('caro');
+  });
+});
+
+describe('IA: aprovecha las habilidades de arma', () => {
+  const base = (armas: UnitProfile['armas'], over: Partial<UnitProfile> = {}): UnitProfile => ({
+    id: 'p', nombre: 'Tropa', rol: null, clase: 'Choque', set: 'Disparo',
+    movimiento: 5, vidas: 8, salvacion: 6, velocidad: 2,
+    escuadraMin: 1, escuadraMax: 1, valor: 3, habilidad: null, radioPeana: 0.63,
+    armas, ...over,
+  });
+  const culata = { kind: 'cuerpo_a_cuerpo' as const, nombre: 'Culata', ataques: 1, danio: 1, danioCritico: 1, habilidades: [] };
+  const u = (id: string, owner: string, x: number, y: number, profileId: string, vidas = 8): Unit => ({
+    id, profileId, owner, position: vec(x, y), vidas, activated: true,
+    accionesRestantes: 2, accionesUsadas: [], trabadaCon: [], seMovio: false,
+    corrio: false, cargo: false, destruidaEnTurno: null, ataqueGratuitoContra: null,
+  });
+  const partida = (units: Record<string, Unit>, profiles: Record<string, UnitProfile>): GameState => ({
+    mode: 'Escaramuza', turno: 1, fase: 'Activaciones',
+    jugadores: ['A', 'B'], ordenIniciativa: ['A', 'B'], jugadorActivo: 'A', unidadActiva: 'a1',
+    units, profiles, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {},
+    turnosTotales: 6, rngState: 3,
+  });
+  const objetivoDe = (s: GameState): string | undefined => {
+    const j = siguienteJugada(s, 'A');
+    return j?.cmd.type === 'Disparar' ? j.cmd.targetId : undefined;
+  };
+
+  it('con Explosiva prefiere al que tiene enemigos pegados', () => {
+    const lanzagranadas = {
+      kind: 'disparo' as const, nombre: 'Lanzagranadas', ataques: 2, distancia: 24, precision: 3,
+      danio: 1, danioCritico: 2, habilidades: [{ nombre: 'Explosiva X' as const, x: 2 }],
+    };
+    const s = partida(
+      {
+        a1: u('a1', 'A', 5, 15, 'tirador'),
+        solo: u('solo', 'B', 15, 5, 'blanco'),
+        grupo: u('grupo', 'B', 15, 25, 'blanco'),
+        pegada1: u('pegada1', 'B', 16.5, 25, 'blanco'),
+        pegada2: u('pegada2', 'B', 15, 26.5, 'blanco'),
+      },
+      { tirador: base([lanzagranadas, culata], { id: 'tirador' }), blanco: base([culata], { id: 'blanco' }) },
+    );
+    expect(objetivoDe(s)).toBe('grupo');
+  });
+
+  it('con Anti- va a por la clase contra la que pega de más', () => {
+    const antiMonstruo = {
+      kind: 'disparo' as const, nombre: 'Arpón', ataques: 2, distancia: 24, precision: 3,
+      danio: 1, danioCritico: 2, habilidades: [{ nombre: 'Anti-X' as const, objetivo: 'Monstruo' as const }],
+    };
+    const s = partida(
+      {
+        a1: u('a1', 'A', 5, 15, 'tirador'),
+        choque: u('choque', 'B', 15, 10, 'choque'),
+        bestia: u('bestia', 'B', 15, 20, 'bestia'),
+      },
+      {
+        tirador: base([antiMonstruo, culata], { id: 'tirador' }),
+        choque: base([culata], { id: 'choque' }),
+        bestia: base([culata], { id: 'bestia', clase: 'Monstruo' }),
+      },
+    );
+    expect(objetivoDe(s)).toBe('bestia');
+  });
+
+  it('no se empeña con quien casi siempre salva si hay otro al que sí hace daño', () => {
+    const fusil = {
+      kind: 'disparo' as const, nombre: 'Fusil', ataques: 3, distancia: 24, precision: 3,
+      danio: 1, danioCritico: 1, habilidades: [],
+    };
+    const s = partida(
+      {
+        a1: u('a1', 'A', 5, 15, 'tirador'),
+        blindado: u('blindado', 'B', 15, 10, 'blindado', 2),
+        blando: u('blando', 'B', 15, 20, 'blando', 2),
+      },
+      {
+        tirador: base([fusil, culata], { id: 'tirador' }),
+        blindado: base([culata], { id: 'blindado', salvacion: 2 }),
+        blando: base([culata], { id: 'blando', salvacion: 6 }),
+      },
+    );
+    // Mismas vidas y mismo Valor: contra 2+ apenas pasa daño; contra 6+ lo tumba.
+    expect(objetivoDe(s)).toBe('blando');
   });
 });
 

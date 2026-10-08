@@ -53,7 +53,7 @@ function makeState(over: Partial<GameState> = {}): GameState {
   return {
     mode: 'Escaramuza',
     turno: 1,
-    fase: 'Iniciativa',
+    fase: 'Despliegue',
     jugadores: ['A', 'B'],
     ordenIniciativa: [],
     jugadorActivo: null,
@@ -65,7 +65,7 @@ function makeState(over: Partial<GameState> = {}): GameState {
     profiles: { soldado },
     terrain: [],
     puestos: [],
-    puntos: {}, refuerzoUsado: {}, turnosTotales: 6,
+    puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6,
     reserva: [],
     rngState: 12345,
     ...over,
@@ -80,7 +80,6 @@ describe('Estructura del turno', () => {
 
   it('la Iniciativa fija el orden y pasa a Activaciones', () => {
     const r = engine.execute({ type: 'TirarIniciativa' });
- engine.execute({ type: 'ComenzarActivaciones' });
     expect(r.ok).toBe(true);
     const s = engine.getState();
     expect(s.fase).toBe('Activaciones');
@@ -90,7 +89,6 @@ describe('Estructura del turno', () => {
 
   it('no se puede activar una unidad del jugador que no tiene el turno', () => {
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     const otro = engine.getState().jugadorActivo === 'A' ? 'b1' : 'a1';
     const r = engine.execute({ type: 'ActivarUnidad', unitId: otro });
     expect(r.ok).toBe(false);
@@ -98,7 +96,6 @@ describe('Estructura del turno', () => {
 
   it('una unidad no puede activarse dos veces en el mismo turno', () => {
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     const first = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     engine.execute({ type: 'ActivarUnidad', unitId: first });
     engine.execute({ type: 'TerminarActivacion', unitId: first });
@@ -109,7 +106,6 @@ describe('Estructura del turno', () => {
 
   it('los jugadores alternan activaciones', () => {
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     const primero = engine.getState().jugadorActivo!;
     const u1 = primero === 'A' ? 'a1' : 'b1';
     engine.execute({ type: 'ActivarUnidad', unitId: u1 });
@@ -125,7 +121,6 @@ describe('Acciones', () => {
   beforeEach(() => {
     engine = new Engine(makeState());
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     activo = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     engine.execute({ type: 'ActivarUnidad', unitId: activo });
   });
@@ -184,19 +179,39 @@ describe('Acciones', () => {
     ).toBe(true);
   });
 
-  it('no se puede terminar el movimiento a 1" o menos de un enemigo', () => {
-    // Enemigo a 5": el destino queda dentro del Movimiento de 6", de modo que
-    // lo único que puede rechazar la acción es la zona de control de 1".
-    const cerca = new Engine(
+  /** Prepara dos enemigos a 5" con uno de ellos activado y listo para mover. */
+  const dosEnfrentados = (): { motor: Engine; u: string; enemigo: string } => {
+    const motor = new Engine(
       makeState({ units: { a1: unit('a1', 'A', 0, 0), b1: unit('b1', 'B', 5, 0) } }),
     );
-    cerca.execute({ type: 'TirarIniciativa' });
-    cerca.execute({ type: 'ComenzarActivaciones' });
-    const u = cerca.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
-    cerca.execute({ type: 'ActivarUnidad', unitId: u });
-    const enemigo = cerca.getState().units[u === 'a1' ? 'b1' : 'a1']!;
-    const pegado = vec(enemigo.position.x - 1.5, enemigo.position.y);
-    const r = cerca.execute({ type: 'Mover', unitId: u, destino: pegado });
+    motor.execute({ type: 'TirarIniciativa' });
+    const u = motor.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
+    motor.execute({ type: 'ActivarUnidad', unitId: u });
+    return { motor, u, enemigo: u === 'a1' ? 'b1' : 'a1' };
+  };
+
+  it('moviendo sí se puede acabar a 1" o menos de un enemigo', () => {
+    // Es lo que deja montado el ataque suelto del turno siguiente.
+    const { motor, u, enemigo } = dosEnfrentados();
+    const e = motor.getState().units[enemigo]!;
+    // Peanas de 0,5": a 1,5" entre centros quedan a 0,5" de separación real.
+    const r = motor.execute({ type: 'Mover', unitId: u, destino: vec(e.position.x - 1.5, e.position.y) });
+    expect(r.ok).toBe(true);
+  });
+
+  it('moviendo no se puede acabar en contacto con un enemigo', () => {
+    const { motor, u, enemigo } = dosEnfrentados();
+    const e = motor.getState().units[enemigo]!;
+    // Peanas de 0,5": a 1" entre centros se tocan. A contacto solo por carga.
+    const r = motor.execute({ type: 'Mover', unitId: u, destino: vec(e.position.x - 1, e.position.y) });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('contacto');
+  });
+
+  it('corriendo sigue sin poder acabar a 1" o menos de un enemigo', () => {
+    const { motor, u, enemigo } = dosEnfrentados();
+    const e = motor.getState().units[enemigo]!;
+    const r = motor.execute({ type: 'Correr', unitId: u, destino: vec(e.position.x - 1.5, e.position.y) });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('1"');
   });
@@ -209,7 +224,6 @@ describe('Disparo', () => {
     });
     const engine = new Engine(state);
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     const activo = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     engine.execute({ type: 'ActivarUnidad', unitId: activo });
     const r = engine.execute({
@@ -230,7 +244,6 @@ describe('Disparo', () => {
     });
     const engine = new Engine(state);
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     const activo = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     engine.execute({ type: 'ActivarUnidad', unitId: activo });
     const r = engine.execute({
@@ -256,7 +269,6 @@ describe('Trabado y destrabe', () => {
   it('una unidad trabada no puede moverse ni disparar', () => {
     const engine = new Engine(trabadas());
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     const activo = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     engine.execute({ type: 'ActivarUnidad', unitId: activo });
     const mover = engine.execute({ type: 'Mover', unitId: activo, destino: vec(0, 5) });
@@ -267,7 +279,6 @@ describe('Trabado y destrabe', () => {
   it('puede Atacar cuerpo a cuerpo a la unidad con la que combate', () => {
     const engine = new Engine(trabadas());
     engine.execute({ type: 'TirarIniciativa' });
-    engine.execute({ type: 'ComenzarActivaciones' });
     const activo = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
     engine.execute({ type: 'ActivarUnidad', unitId: activo });
     const r = engine.execute({
@@ -286,7 +297,6 @@ describe('Trabado y destrabe', () => {
     for (let seed = 0; seed < 40; seed++) {
       const engine = new Engine({ ...trabadas(), rngState: seed });
       engine.execute({ type: 'TirarIniciativa' });
-      engine.execute({ type: 'ComenzarActivaciones' });
       const activo = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
       engine.execute({ type: 'ActivarUnidad', unitId: activo });
       const r = engine.execute({ type: 'Destrabarse', unitId: activo });
@@ -315,7 +325,6 @@ describe('Determinismo', () => {
     const play = () => {
       const engine = new Engine(makeState({ rngState: 777 }));
       engine.execute({ type: 'TirarIniciativa' });
-      engine.execute({ type: 'ComenzarActivaciones' });
       const activo = engine.getState().jugadorActivo === 'A' ? 'a1' : 'b1';
       engine.execute({ type: 'ActivarUnidad', unitId: activo });
       engine.execute({

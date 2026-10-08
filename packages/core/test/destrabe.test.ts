@@ -17,9 +17,9 @@ const unit = (id: string, owner: string, x: number, y: number, trabadaCon: strin
 });
 
 const estado = (semilla: number, profiles: Record<string, UnitProfile>, units: Record<string, Unit>): GameState => ({
-  mode: 'Escaramuza', turno: 1, fase: 'Iniciativa',
+  mode: 'Escaramuza', turno: 1, fase: 'Despliegue',
   jugadores: ['A', 'B'], ordenIniciativa: [], jugadorActivo: null, unidadActiva: null,
-  units, profiles, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: semilla,
+  units, profiles, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: semilla,
 });
 
 const trabadas = (semilla: number) =>
@@ -30,7 +30,6 @@ const trabadas = (semilla: number) =>
 
 function activar(e: Engine): string {
   e.execute({ type: 'TirarIniciativa' });
-  e.execute({ type: 'ComenzarActivaciones' });
   const s = e.getState();
   const u = Object.values(s.units).find((x) => x.owner === s.jugadorActivo)!;
   e.execute({ type: 'ActivarUnidad', unitId: u.id });
@@ -88,7 +87,6 @@ describe('Destrabarse', () => {
       }),
     );
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     // Se fuerza que actúe A, que es quien está anclado por b1.
     while (e.getState().jugadorActivo !== 'A') {
       const s = e.getState();
@@ -111,7 +109,6 @@ describe('Destrabarse', () => {
       }),
     );
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     while (e.getState().jugadorActivo !== 'A') {
       const s = e.getState();
       const u = Object.values(s.units).find((x) => x.owner === s.jugadorActivo && !x.activated)!;

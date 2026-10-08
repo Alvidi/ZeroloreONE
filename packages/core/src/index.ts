@@ -18,3 +18,4 @@ export { lineOfSight, hasCover, coberturasDeTiro, type LosResult } from './rules
 export { poligonoDeVision, puntoEnPoligono } from './rules/vision.ts';
 export * from './rules/puestos.ts';
 export { caminoMasCorto, recortarCamino, type Camino } from './rules/camino.ts';
+export { preverAtaque, type Prevision, type PrevisionCtx } from './rules/prevision.ts';

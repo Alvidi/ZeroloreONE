@@ -81,16 +81,18 @@ describe('Habilidades de unidad apagadas', () => {
   });
 
   const estado = (): GameState => ({
-    mode: 'Escaramuza', turno: 1, fase: 'Iniciativa',
+    mode: 'Escaramuza', turno: 1, fase: 'Despliegue',
     jugadores: ['A', 'B'], ordenIniciativa: [], jugadorActivo: null, unidadActiva: null,
     units: { a1: unit('a1', 'A', 10, 10), b1: unit('b1', 'B', 10, 20) },
-    profiles: { c: conCertero }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: 3,
+    profiles: { c: conCertero }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: 3,
   });
 
-  const dispara = (habilidades: boolean): number | null => {
-    const e = new Engine(estado(), [], { habilidades });
+  const dispara = (
+    habilidades: boolean | { habilidadesArma: boolean; habilidadesUnidad: boolean },
+  ): number | null => {
+    const opciones = typeof habilidades === 'boolean' ? { habilidades } : habilidades;
+    const e = new Engine(estado(), [], opciones);
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     const s = e.getState();
     const atacante = Object.values(s.units).find((u) => u.owner === s.jugadorActivo)!;
     const objetivo = atacante.id === 'a1' ? 'b1' : 'a1';
@@ -106,5 +108,15 @@ describe('Habilidades de unidad apagadas', () => {
   it('Certero mejora la Precisión encendido y no la toca apagado', () => {
     expect(dispara(true)).toBe(3);   // 4+ mejorado en 1
     expect(dispara(false)).toBe(4);  // el valor impreso del arma
+  });
+
+  /*
+    La combinación con la que se juega ahora: armas encendidas, unidad apagada.
+    Las dos cosas van por interruptores distintos, y encender una no puede
+    arrastrar a la otra.
+  */
+  it('con armas encendidas y unidad apagada, Certero sigue sin aplicarse', () => {
+    expect(dispara({ habilidadesArma: true, habilidadesUnidad: false })).toBe(4);
+    expect(dispara({ habilidadesArma: false, habilidadesUnidad: true })).toBe(3);
   });
 });

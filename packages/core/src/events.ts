@@ -21,6 +21,7 @@ export type GameEvent =
   | { type: 'AtaqueGratuitoPendiente'; unitId: string; targetId: string }
   | { type: 'DanioAplicado'; unitId: string; danio: number; vidasRestantes: number }
   | { type: 'UnidadDestruida'; unitId: string }
+  | { type: 'ExplosivaAlcanza'; attackerId: string; origenId: string; afectados: readonly string[]; danio: number }
   | { type: 'UnidadRetirada'; unitId: string }
   | { type: 'UnidadDesplegada'; unitId: string; puestoId: string; posicion: Vec2 }
   | { type: 'PuestoConquistado'; puestoId: string; jugador: PlayerId | null; anterior: PlayerId | null }

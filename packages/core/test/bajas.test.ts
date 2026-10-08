@@ -18,21 +18,20 @@ const unit = (id: string, owner: string, x: number, y: number): Unit => ({
 });
 
 const estado = (): GameState => ({
-  mode: 'Escaramuza', turno: 1, fase: 'Iniciativa',
+  mode: 'Escaramuza', turno: 1, fase: 'Despliegue',
   jugadores: ['A', 'B'], ordenIniciativa: [], jugadorActivo: null, unidadActiva: null,
   units: {
     a1: unit('a1', 'A', 10, 10),
     b1: unit('b1', 'B', 10, 18),
     b2: unit('b2', 'B', 30, 18),
   },
-  profiles: { p: perfil }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: 5,
+  profiles: { p: perfil }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: 5,
 });
 
 describe('Bajas en el campo de batalla', () => {
   it('la unidad destruida se queda en la mesa durante ese turno', () => {
     const e = new Engine(estado());
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     // Se fuerza el turno de A para poder disparar con a1.
     // a1 dispara a b1; b2 sigue viva, así que la partida continúa.
     if (e.getState().jugadorActivo !== 'A') {
@@ -53,7 +52,6 @@ describe('Bajas en el campo de batalla', () => {
   it('se retira al empezar el turno siguiente', () => {
     const e = new Engine(estado());
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     if (e.getState().jugadorActivo !== 'A') {
       const primero = Object.values(e.getState().units).find((x) => x.owner !== 'A')!;
       e.execute({ type: 'ActivarUnidad', unitId: primero.id });
@@ -92,7 +90,6 @@ describe('Puntos por bajas', () => {
   it('quien mata se apunta el Valor de la unidad destruida', () => {
     const e = new Engine(estado(), [], { habilidades: false });
     e.execute({ type: 'TirarIniciativa' });
-    e.execute({ type: 'ComenzarActivaciones' });
     // Igual que arriba: se cede el turno hasta que le toque a A.
     if (e.getState().jugadorActivo !== 'A') {
       const primero = Object.values(e.getState().units).find((x) => x.owner !== 'A')!;

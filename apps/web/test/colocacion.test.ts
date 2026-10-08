@@ -74,3 +74,25 @@ describe('Colocación al Correr (con anillo mínimo)', () => {
     expect(Math.hypot(p.x - pegada.x, p.y - pegada.y)).toBeGreaterThanOrEqual(5 - 1e-6);
   });
 });
+
+describe('Colocación junto a otras miniaturas', () => {
+  const origen = vec(5, 15);
+  const destino = (unidades: { centro: ReturnType<typeof vec>; radio: number; margen: number }[]) =>
+    destinoDeMovimiento({
+      origen, radio: R, cursor: vec(10, 15), tope: 7, minimo: null,
+      mesa: MESA, terreno: [], puestos: [], unidades, iman: 0.9,
+    });
+
+  it('se queda fuera de la zona de control de un enemigo', () => {
+    const p = destino([{ centro: vec(10, 15), radio: R, margen: 1 }]);
+    const separacion = Math.hypot(p.x - 10, p.y - 15) - R - R;
+    expect(separacion).toBeGreaterThan(1);
+  });
+
+  it('a una aliada le basta con no pisarla', () => {
+    const p = destino([{ centro: vec(10, 15), radio: R, margen: 0 }]);
+    const separacion = Math.hypot(p.x - 10, p.y - 15) - R - R;
+    expect(separacion).toBeGreaterThanOrEqual(-1e-6);
+    expect(separacion).toBeLessThan(1);
+  });
+});

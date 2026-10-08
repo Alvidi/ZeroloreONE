@@ -11,15 +11,23 @@ import profilesJson from '../../../packages/data/profiles.json';
 
 const profiles = profilesJson as unknown as UnitProfile[];
 
-/** Mesa de escaramuza, en pulgadas. */
-export const MESA = { ancho: 44, alto: 30 };
+/**
+ * Mesa de escaramuza, en pulgadas.
+ *
+ * Proporción 2:1 a propósito: es la del hueco que queda en pantalla entre la
+ * cabecera y la banda, así que la mesa lo llena entero en vez de dejar dos
+ * franjas muertas a los lados. Cuando haya cámara, esto dejará de mandar y la
+ * mesa podrá ser tan grande como pida la partida.
+ */
+export const MESA = { ancho: 60, alto: 30 };
 
 /**
- * Habilidades de arma y de unidad apagadas mientras se cierra la base del
- * juego. El motor las tiene implementadas y probadas; se encienden poniendo
- * esto en true, sin tocar nada más.
+ * Habilidades encendidas por separado. Las de ARMA ya se juegan; las de UNIDAD
+ * (Guardia, Certero, Terror…) siguen apagadas hasta que les toque. El motor
+ * tiene las dos implementadas: se encienden cambiando esto, sin tocar nada más.
  */
-export const HABILIDADES_ACTIVAS = false;
+export const HABILIDADES_ARMA = true;
+export const HABILIDADES_UNIDAD = false;
 
 export const PERFILES = profiles;
 
@@ -32,14 +40,13 @@ export const perfilPorId = (id: string): UnitProfile | undefined =>
   profiles.find((p) => p.id === id);
 
 /**
- * Mesa de pruebas: un bloqueo en el centro que parte la mesa en dos y obliga a
- * elegir flanco, y una cobertura a cada lado para tener dónde resguardarse al
- * avanzar. Nada más, para que se lea bien lo que pasa.
+ * Mesa de prácticas: lo mínimo para ver movimiento, cobertura y disparo sin
+ * pasear la vista. Un murete junto al puesto disputado y nada más; los dos
+ * Cuarteles Generales quedan a 16", que es distancia de tiro desde el primer
+ * turno.
  */
 const TERRENO: Terrain[] = [
-  { id: 'ruina-central', rect: { x: 19, y: 12, width: 6, height: 6 }, altura: 4, tipo: 'bloqueo' },
-  { id: 'murete-oeste', rect: { x: 8, y: 14.4, width: 6, height: 1.2 }, altura: 1.6, tipo: 'cobertura' },
-  { id: 'murete-este', rect: { x: 30, y: 14.4, width: 6, height: 1.2 }, altura: 1.6, tipo: 'cobertura' },
+  { id: 'murete', rect: { x: 33, y: 14.4, width: 6, height: 1.2 }, altura: 1.6, tipo: 'cobertura' },
 ];
 
 /**
@@ -48,19 +55,10 @@ const TERRENO: Terrain[] = [
  * los flancos, a repartir. Son los únicos puntos por donde entran refuerzos.
  */
 export const PUESTOS: readonly Puesto[] = [
-  // Los Cuarteles Generales usan el token grande de 6"; los demás, el de 3".
-  { id: 'cg-a', centro: vec(22, 4), radio: 3, esCuartelGeneral: true, duenio: 'A' },
-  { id: 'cg-b', centro: vec(22, 26), radio: 3, esCuartelGeneral: true, duenio: 'B' },
-  /*
-    Los cuatro a disputar van pegados a la ruina central, uno por cara. Se
-    conquistan desde su sombra: quien los quiera tiene que meterse justo donde
-    no ve ni le ven, y el que ataca no puede tirarle desde lejos. Ninguno toca
-    los Cuarteles Generales, para que no se regalen.
-  */
-  { id: 'ruina-oeste', centro: vec(17.4, 15), radio: 1.5, esCuartelGeneral: false, duenio: null },
-  { id: 'ruina-este', centro: vec(26.6, 15), radio: 1.5, esCuartelGeneral: false, duenio: null },
-  { id: 'ruina-norte', centro: vec(22, 10.5), radio: 1.5, esCuartelGeneral: false, duenio: null },
-  { id: 'ruina-sur', centro: vec(22, 19.5), radio: 1.5, esCuartelGeneral: false, duenio: null },
+  // Los dos Cuarteles Generales, cerca el uno del otro, y un puesto en medio.
+  { id: 'cg-a', centro: vec(30, 7), radio: 3, esCuartelGeneral: true, duenio: 'A' },
+  { id: 'cg-b', centro: vec(30, 23), radio: 3, esCuartelGeneral: true, duenio: 'B' },
+  { id: 'centro', centro: vec(30, 15), radio: 1.5, esCuartelGeneral: false, duenio: null },
 ];
 
 /**
@@ -79,20 +77,27 @@ export interface Lista {
  * reglamento lo exige en partida real, pero aquí estorba para probar reglas.
  */
 /*
-  Tres unidades por bando, una de cada set, para ver la diferencia entre ellas.
-  TODAS empiezan en Reserva: como dice el reglamento, la mesa se llena
-  desplegando por los puestos de mando que controlas, y en el turno 1 eso son
-  solo los Cuarteles Generales.
+  Ejércitos de prueba para las habilidades de arma. Cada bando lleva su Héroe
+  —el reglamento exige exactamente uno— y tres unidades de apoyo, elegidas
+  para que entren en mesa ocho habilidades distintas entre los dos:
+
+    Azul (34): Nigromante (Directo, Inestable) · Armas Pesadas Disparo
+               (Parabólica, Explosiva 1) · Élite Equilibrado (Perforante) ·
+               Comando Equilibrado (Errática, Anti-Élite)
+    Rojo (32): Místico (Alcance, Directo) · Armas Pesadas Disparo ·
+               Élite Disparo (Brutal 5+) · Comando Equilibrado
+
+  Todo empieza en Reserva y el Héroe es lo primero que sale.
 */
 export const LISTA_A: Lista = {
   heroeId: '',
   unidadIds: [],
-  reservaIds: ['choque_disparo', 'choque_equilibrado', 'choque_asalto'],
+  reservaIds: ['heroe_heroe4', 'armaspesadas_disparo', 'elite_equilibrado', 'comando_equilibrado'],
 };
 export const LISTA_B: Lista = {
   heroeId: '',
   unidadIds: [],
-  reservaIds: ['choque_disparo', 'choque_equilibrado', 'choque_asalto'],
+  reservaIds: ['heroe_heroe5', 'armaspesadas_disparo', 'elite_disparo', 'comando_equilibrado'],
 };
 export const LISTA_POR_DEFECTO: Lista = LISTA_A;
 
@@ -146,7 +151,7 @@ export function createGame(listaA: Lista, listaB: Lista, semilla: number): GameS
   return {
     mode: 'Escaramuza',
     turno: 1,
-    fase: 'Iniciativa',
+    fase: 'Despliegue',
     jugadores: ['A', 'B'],
     ordenIniciativa: [],
     jugadorActivo: null,
@@ -157,7 +162,10 @@ export function createGame(listaA: Lista, listaB: Lista, semilla: number): GameS
     puestos: PUESTOS,
     reserva,
     puntos: { A: 0, B: 0 },
-    refuerzoUsado: {}, turnosTotales: 6,
+    refuerzosUsados: {},
+    desplieguePasado: {},
+    // Guerra Total recomienda 5 turnos.
+    turnosTotales: 5,
     rngState: semilla,
   };
 }

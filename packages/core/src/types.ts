@@ -181,9 +181,12 @@ export const ACTION_COST: Readonly<Record<ActionKind, number>> = {
 export const PUNTOS_POR_PUESTO = 5;
 
 /**
- * Zona de control, en pulgadas. No se puede terminar un movimiento —ni entrar
- * de refuerzo— a esta distancia o menos de un ENEMIGO, salvo al Cargar. Con
- * las unidades propias no hay separación mínima, solo no solaparse.
+ * Zona de control, en pulgadas. Se aplica al CORRER y al entrar de refuerzo: no
+ * se puede terminar a esta distancia o menos de un ENEMIGO.
+ *
+ * Moviendo NO se aplica: el reglamento solo prohíbe acabar en contacto físico,
+ * y acercarse a 1" o menos es legal —es justo lo que prepara un ataque suelto—.
+ * Con las unidades propias no hay separación mínima, solo no solaparse.
  */
 export const ZONA_CONTROL = 1;
 
@@ -235,7 +238,17 @@ export interface EnReserva {
   readonly owner: PlayerId;
 }
 
-export type Phase = 'Iniciativa' | 'Activaciones' | 'FinDeTurno';
+/**
+ * El turno ya no tiene fases internas: los jugadores alternan activaciones y se
+ * acabó. Lo único aparte es el despliegue inicial, antes del primer turno.
+ *
+ * - `Despliegue`: al empezar la partida, ambos alternan sacando unidades de
+ *   Reserva hasta que los dos pasan. El Héroe sale primero.
+ * - `Activaciones`: el turno entero. En tu vez activas una unidad O metes un
+ *   refuerzo, que consume la vez igual que una activación.
+ * - `FinDeTurno`: estado momentáneo entre turnos.
+ */
+export type Phase = 'Despliegue' | 'Activaciones' | 'FinDeTurno';
 
 export interface GameState {
   readonly mode: GameMode;
@@ -258,11 +271,15 @@ export interface GameState {
   /** Puntos de victoria por jugador. */
   readonly puntos: Readonly<Record<PlayerId, number>>;
   /**
-   * Quién ha metido ya su refuerzo este turno. Entra UNA unidad por jugador y
-   * turno: si no, el primer turno se vacía la reserva entera y la partida se
-   * juega antes de empezar.
+   * Cuántos refuerzos ha metido cada jugador este turno. El tope son tantos
+   * como puestos de mando controle: cuantos más domines, más rápido te llegan.
    */
-  readonly refuerzoUsado: Readonly<Record<PlayerId, boolean>>;
+  readonly refuerzosUsados: Readonly<Record<PlayerId, number>>;
+  /**
+   * Quién ha dicho ya que no despliega más en el despliegue inicial. Cuando lo
+   * dicen todos, empieza el primer turno.
+   */
+  readonly desplieguePasado: Readonly<Record<PlayerId, boolean>>;
   /** Turnos acordados antes de empezar. Al agotarse gana quien más puntos tenga. */
   readonly turnosTotales: number;
   readonly rngState: number;

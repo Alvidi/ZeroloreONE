@@ -41,6 +41,11 @@ import { MESA } from './setup.ts';
  *   5. Si no, avanza hacia el puesto más cercano que no controle, y si los
  *      tiene todos, a por el enemigo.
  */
+/** Holgura, en pulgadas, al decidir si un enemigo amenaza un puesto normal. */
+const MARGEN_AMENAZA = 1;
+/** Y un Cuartel General, que se vigila con más cuidado: perderlo es perder. */
+const MARGEN_AMENAZA_CG = 6;
+
 export interface Jugada {
   readonly cmd: Command;
   /** Para el registro: por qué hace esto. */
@@ -48,25 +53,60 @@ export interface Jugada {
 }
 
 export function siguienteJugada(state: GameState, jugador: string): Jugada | null {
-  if (state.fase === 'Iniciativa') return jugadaDeDespliegue(state, jugador);
-  if (state.fase !== 'Activaciones' || state.jugadorActivo !== jugador) return null;
+  if (state.jugadorActivo !== jugador) return null;
+
+  /*
+    Despliegue inicial: coloca hasta quedarse sin reserva y entonces pasa. No
+    hay tope aquí, el tope es cosa de los refuerzos en partida.
+  */
+  if (state.fase === 'Despliegue') {
+    return (
+      jugadaDeDespliegue(state, jugador) ?? {
+        cmd: { type: 'PasarDespliegue', jugador },
+        motivo: 'no despliega más',
+      }
+    );
+  }
+  if (state.fase !== 'Activaciones') return null;
 
   const activa = state.unidadActiva ? state.units[state.unidadActiva] : undefined;
-  if (activa && activa.owner === jugador && activa.vidas > 0) return jugadaDeUnidad(state, activa);
+  if (activa && activa.owner === jugador) {
+    // Si ha caído en su propia activación (el retroceso de Inestable), hay que
+    // cerrarla: el motor no deja activar a otra mientras siga abierta.
+    if (activa.vidas <= 0) {
+      return { cmd: { type: 'TerminarActivacion', unitId: activa.id }, motivo: 'ha caído' };
+    }
+    return jugadaDeUnidad(state, activa);
+  }
 
   const siguiente = Object.values(state.units).find(
     (u) => u.owner === jugador && u.vidas > 0 && !u.activated,
   );
-  if (!siguiente) return null;
-  return { cmd: { type: 'ActivarUnidad', unitId: siguiente.id }, motivo: 'le toca' };
+  if (siguiente) {
+    return { cmd: { type: 'ActivarUnidad', unitId: siguiente.id }, motivo: 'le toca' };
+  }
+  /*
+    Sin nada que activar todavía queda una jugada: meter un refuerzo, que
+    consume la vez igual que una activación.
+  */
+  return jugadaDeDespliegue(state, jugador);
 }
 
 // ------------------------------------------------------------------ Despliegue
 
 function jugadaDeDespliegue(state: GameState, jugador: string): Jugada | null {
-  // Un refuerzo por jugador y turno; el resto espera.
-  if (state.refuerzoUsado[jugador]) return null;
-  const enReserva = state.reserva.find((r) => r.owner === jugador);
+  /*
+    En partida, el tope de refuerzos por turno son los puestos que controles.
+    En el despliegue inicial no hay tope: colocas hasta que digas basta.
+  */
+  if (state.fase !== 'Despliegue') {
+    const tope = state.puestos.filter((pm) => pm.duenio === jugador).length;
+    if ((state.refuerzosUsados[jugador] ?? 0) >= tope) return null;
+  }
+  // El Héroe sale el primero; después, el resto en el orden de la lista.
+  const suyas = state.reserva.filter((r) => r.owner === jugador);
+  const enReserva =
+    suyas.find((r) => state.profiles[r.profileId]?.clase === 'Heroe') ?? suyas[0];
   if (!enReserva) return null;
   const perfil = state.profiles[enReserva.profileId];
   if (!perfil) return null;
@@ -133,9 +173,7 @@ function jugadaDeUnidad(state: GameState, u: Unit): Jugada | null {
   // 1. Trabada: pelear es lo único que tiene sentido.
   if (u.trabadaCon.length > 0 && puede('AtacarCaC')) {
     const arma = p.armas.find((w) => w.kind === 'cuerpo_a_cuerpo');
-    const objetivo = arma
-      ? mejorObjetivo(state, u.trabadaCon, danioMedio(arma)) ?? u.trabadaCon[0]
-      : u.trabadaCon[0];
+    const objetivo = mejorObjetivo(state, u.trabadaCon, arma) ?? u.trabadaCon[0];
     if (arma && objetivo) {
       return {
         cmd: { type: 'AtacarCaC', unitId: u.id, targetId: objetivo, armaNombre: arma.nombre },
@@ -149,7 +187,7 @@ function jugadaDeUnidad(state: GameState, u: Unit): Jugada | null {
     for (const arma of p.armas) {
       if (arma.kind !== 'disparo') continue;
       const objetivos = objetivosDeDisparo(state, u, p, arma);
-      const elegido = mejorObjetivo(state, objetivos, danioMedio(arma));
+      const elegido = mejorObjetivo(state, objetivos, arma);
       if (elegido) {
         return {
           cmd: { type: 'Disparar', unitId: u.id, targetId: elegido, armaNombre: arma.nombre },
@@ -162,20 +200,18 @@ function jugadaDeUnidad(state: GameState, u: Unit): Jugada | null {
   // 3. Cargar: si alcanza a alguien, se le echa encima.
   if (puede('Cargar')) {
     const cac = p.armas.find((w) => w.kind === 'cuerpo_a_cuerpo');
-    const elegido = mejorObjetivo(
-      state, objetivosDeCarga(state, u, p), cac ? danioMedio(cac) : 0,
-    );
+    const elegido = mejorObjetivo(state, objetivosDeCarga(state, u, p), cac);
     if (elegido) {
       return { cmd: { type: 'Cargar', unitId: u.id, targetId: elegido }, motivo: 'carga' };
     }
   }
 
   /*
-    4. Moverse. Antes de nada: si es la única que sostiene un puesto suyo, se
-       queda. Marcharse a buscar otro cuesta PUNTOS_POR_PUESTO cada turno, y
-       casi nada de lo que pueda encontrar fuera lo compensa.
+    4. Moverse. Antes de nada: si es la única que sostiene un puesto suyo Y hay
+       un enemigo en condiciones de quitárselo, se queda. Sin amenaza cerca no
+       hay nada que defender, y quedarse quieta solo desperdicia sus armas.
   */
-  if (sostieneElPuestoSola(state, u, p)) {
+  if (debeSostenerElPuesto(state, u, p)) {
     return { cmd: { type: 'TerminarActivacion', unitId: u.id }, motivo: 'sostiene el puesto' };
   }
 
@@ -193,7 +229,7 @@ function jugadaDeUnidad(state: GameState, u: Unit): Jugada | null {
         mesa: MESA,
         terreno: state.terrain,
         puestos: state.puestos,
-        unidades: otrasUnidades(state, u.id),
+        unidades: otrasUnidades(state, u.id, correr),
         iman: 0.9,
       });
       if (centerDistance(destino, u.position) > 0.05) {
@@ -211,16 +247,42 @@ function jugadaDeUnidad(state: GameState, u: Unit): Jugada | null {
 }
 
 /**
- * ¿Es la única de su bando que ocupa un puesto que controla? Entonces irse lo
- * pierde. Vale `PUNTOS_POR_PUESTO` por turno, que es más que la mayoría de
- * unidades del juego.
+ * ¿Tiene que quedarse de guardia? Solo si es la única de su bando en un puesto
+ * que controla y hay un enemigo que podría plantarse ahí pronto.
+ *
+ * La primera versión se quedaba siempre que sostuviera un puesto sola, y en
+ * partida eso congelaba a medio ejército —Héroes incluidos— detrás de la ruina
+ * sin disparar un tiro. Ahora:
+ *   - Sin amenaza cerca, avanza: no hay nada que defender.
+ *   - El Cuartel General se vigila con más margen, porque perderlo es derrota
+ *     inmediata en Guerra Total.
+ *   - El Héroe no hace guardia en puestos normales: es la punta de lanza y lo
+ *     que más puntos vale, no un centinela.
  */
-function sostieneElPuestoSola(state: GameState, u: Unit, p: UnitProfile): boolean {
+function debeSostenerElPuesto(state: GameState, u: Unit, p: UnitProfile): boolean {
   if (PUNTOS_POR_PUESTO <= 0) return false;
   return state.puestos.some((pm) => {
     if (pm.duenio !== u.owner) return false;
     if (!unidadOcupa(pm, u, p)) return false;
-    return !ocupantes(state, pm, u.owner).some((o) => o.id !== u.id);
+    if (ocupantes(state, pm, u.owner).some((o) => o.id !== u.id)) return false;
+    if (!pm.esCuartelGeneral && p.clase === 'Heroe') return false;
+    return puestoAmenazado(state, pm, u.owner);
+  });
+}
+
+/**
+ * ¿Algún enemigo podría llegar a este puesto en su próxima activación? Se mide
+ * con su Movimiento + Velocidad, que es lo máximo que recorre corriendo o
+ * cargando, más el radio del puesto. Al Cuartel General se le da margen extra.
+ */
+function puestoAmenazado(state: GameState, pm: Puesto, duenio: string): boolean {
+  const margen = pm.esCuartelGeneral ? MARGEN_AMENAZA_CG : MARGEN_AMENAZA;
+  return Object.values(state.units).some((e) => {
+    if (e.owner === duenio || e.vidas <= 0) return false;
+    const ep = state.profiles[e.profileId];
+    if (!ep) return false;
+    const alcance = ep.movimiento + ep.velocidad + pm.radio + margen;
+    return centerDistance(e.position, pm.centro) <= alcance;
   });
 }
 
@@ -251,14 +313,14 @@ function puestoObjetivo(state: GameState, u: Unit, p: UnitProfile): { id: string
  * El objetivo que más puntos promete. Una baja vale el Valor de la unidad, así
  * que rematar a una unidad cara y tocada gana a arañarle vidas a una entera.
  *
- * Con `danioEsperado` se sabe a quién puede tumbar de este golpe: esos van
- * primero, ordenados por Valor. Al resto se les mira el Valor por Vida que le
- * queda, o sea, cuántos puntos rinde cada punto de daño invertido.
+ * El daño se estima contra CADA objetivo, porque depende de él: su salvación,
+ * si el arma lo perfora, si tiene Anti- contra su clase. Y con Explosiva cuenta
+ * también a los enemigos pegados al objetivo, que se llevan el mismo daño.
  */
 function mejorObjetivo(
   state: GameState,
   ids: readonly string[],
-  danioEsperado: number,
+  arma: RangedWeapon | MeleeWeapon | undefined,
 ): string | null {
   let mejor: string | null = null;
   let mejorNota = -Infinity;
@@ -268,22 +330,84 @@ function mejorObjetivo(
     const perfil = o ? state.profiles[o.profileId] : undefined;
     if (!o || !perfil || o.vidas <= 0) continue;
 
-    const remata = danioEsperado >= o.vidas;
-    // Rematar pesa muchísimo más: el Valor solo se cobra si la unidad cae.
-    const nota = remata ? 1000 + perfil.valor : perfil.valor / o.vidas;
+    const danio = arma ? danioMedio(arma, perfil) : 0;
+    let nota = puntosPrevistos(o.vidas, perfil.valor, danio);
+    for (const vecino of alcanzablesPorExplosiva(state, o, arma)) {
+      const vp = state.profiles[vecino.profileId];
+      if (vp) nota += puntosPrevistos(vecino.vidas, vp.valor, arma ? danioMedio(arma, vp) : 0);
+    }
     if (nota > mejorNota) { mejorNota = nota; mejor = id; }
   }
   return mejor;
 }
 
-/** Daño medio que cabe esperar de un arma, para saber a quién puede rematar. */
-function danioMedio(arma: RangedWeapon | MeleeWeapon): number {
+/**
+ * Cuánto vale meterle este daño a una unidad. Tumbarla cobra su Valor entero y
+ * pesa muchísimo más que cualquier daño a medias; si no cae, se cuenta la parte
+ * proporcional, que es lo que acerca a la siguiente baja.
+ */
+function puntosPrevistos(vidas: number, valor: number, danio: number): number {
+  if (danio >= vidas) return 1000 + valor;
+  return valor * Math.min(1, danio / vidas);
+}
+
+/** Enemigos del objetivo a 3" de él que la Explosiva del arma se llevaría. */
+function alcanzablesPorExplosiva(
+  state: GameState,
+  objetivo: Unit,
+  arma: RangedWeapon | MeleeWeapon | undefined,
+): Unit[] {
+  const explosiva = arma?.habilidades.find((h) => h.nombre === 'Explosiva X');
+  if (!explosiva?.x) return [];
+  const po = state.profiles[objetivo.profileId];
+  if (!po) return [];
+  return Object.values(state.units)
+    .filter((v) => v.id !== objetivo.id && v.owner === objetivo.owner && v.vidas > 0)
+    .filter((v) => {
+      const vp = state.profiles[v.profileId];
+      return !!vp && centerDistance(objetivo.position, v.position) - po.radioPeana - vp.radioPeana <= 3;
+    })
+    .slice(0, explosiva.x);
+}
+
+/**
+ * Daño medio que cabe esperar de un arma contra un perfil concreto. Sigue la
+ * secuencia del reglamento con probabilidades en vez de dados:
+ *   impacta → ¿crítico? → ¿salva? → daño, más el extra de Anti-.
+ */
+function danioMedio(arma: RangedWeapon | MeleeWeapon, objetivo: UnitProfile): number {
+  const tiene = (n: string) => arma.habilidades.some((h) => h.nombre === n);
   const ataques = mediaCantidad(arma.ataques);
-  /*
-    A distancia impacta con su Precisión; en CaC fallan el 1 y el 2. Precisión
-    nula es la convención de las armas Directo: impactan siempre.
-  */
-  const acierta =
-    arma.kind === 'disparo' ? (arma.precision === null ? 1 : (7 - arma.precision) / 6) : 4 / 6;
-  return ataques * acierta * arma.danio;
+
+  // Probabilidad de impactar con cada dado.
+  let umbral: number | null;
+  if (arma.kind === 'disparo') {
+    if (tiene('Directo')) umbral = null;
+    else if (tiene('Errática')) umbral = 3.5; // la Precisión sale de 1D6
+    else umbral = arma.precision;
+  } else {
+    umbral = 3; // en cuerpo a cuerpo fallan el 1 y el 2
+  }
+
+  // Brutal adelanta el crítico; sin tirada (Directo) no hay críticos.
+  const brutal = arma.habilidades.find((h) => h.nombre === 'Brutal X+');
+  const critico = brutal?.x ?? 6;
+
+  let danioPorDado: number;
+  if (umbral === null) {
+    danioPorDado = arma.danio;
+  } else {
+    const pCritico = Math.max(0, 7 - Math.max(critico, umbral)) / 6;
+    const pNormal = Math.max(0, critico - umbral) / 6;
+    danioPorDado = pNormal * arma.danio + pCritico * arma.danioCritico;
+  }
+
+  // Salvación del objetivo; Perforante la empeora. Un 1 siempre falla.
+  const salvacion = Math.min(6, objetivo.salvacion + (tiene('Perforante') ? 1 : 0));
+  const pNoSalva = Math.max(1, salvacion - 1) / 6;
+
+  let total = ataques * danioPorDado * pNoSalva;
+  const anti = arma.habilidades.find((h) => h.nombre === 'Anti-X' && h.objetivo === objetivo.clase);
+  if (anti && total > 0) total += 2; // media de 1D3
+  return total;
 }

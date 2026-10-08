@@ -32,10 +32,39 @@ const unit = (id: string, owner: string, x: number, y: number, over: Partial<Uni
 const estado = (units: Record<string, Unit>, over: Partial<GameState> = {}): GameState => ({
   mode: 'Escaramuza', turno: 1, fase: 'Activaciones',
   jugadores: ['A', 'B'], ordenIniciativa: ['A', 'B'], jugadorActivo: 'A',
-  unidadActiva: 'a1', units, profiles: { p: perfil() }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzoUsado: {}, turnosTotales: 6, rngState: 1, ...over,
+  unidadActiva: 'a1', units, profiles: { p: perfil() }, terrain: [], puestos: [], reserva: [], puntos: {}, refuerzosUsados: {}, desplieguePasado: {}, turnosTotales: 6, rngState: 1, ...over,
 });
 
 const buscar = (l: ReturnType<typeof accionesDisponibles>, k: string) => l.find((a) => a.kind === k)!;
+
+describe('Ataque suelto', () => {
+  /*
+    Peanas de 0,63": entre centros hay que sumar 1,26" a la separación real que
+    se quiera entre las dos peanas.
+  */
+  const aSeparacion = (sep: number): GameState =>
+    estado({ a1: unit('a1', 'A', 10, 10), b1: unit('b1', 'B', 10, 10 + sep + 1.26) });
+
+  it('se enciende con un enemigo a 1", sin estar trabada', () => {
+    const s = aSeparacion(1);
+    expect(buscar(accionesDisponibles(s, s.units.a1, perfil()), 'AtacarCaC').disponible).toBe(true);
+  });
+
+  it('sigue apagada con el enemigo a 2"', () => {
+    const s = aSeparacion(2);
+    const a = buscar(accionesDisponibles(s, s.units.a1, perfil()), 'AtacarCaC');
+    expect(a.disponible).toBe(false);
+    expect(a.motivo).toContain('1"');
+  });
+
+  it('a 1" no obliga a cargar: Mover y Disparar siguen disponibles', () => {
+    // El ataque suelto no traba, así que la unidad conserva sus opciones.
+    const s = aSeparacion(1);
+    const l = accionesDisponibles(s, s.units.a1, perfil());
+    expect(buscar(l, 'Mover').disponible).toBe(true);
+    expect(buscar(l, 'Disparar').disponible).toBe(true);
+  });
+});
 
 describe('Acciones disponibles', () => {
   it('devuelve siempre las seis acciones del reglamento', () => {
@@ -111,10 +140,40 @@ describe('Acciones disponibles', () => {
     expect(buscar(l, 'Mover').motivo).toContain('Artillería');
   });
 
-  it('sin unidad activada todo está apagado', () => {
+  /*
+    Ya no hace falta activar a mano: si la unidad PUEDE empezar a jugar, sus
+    acciones salen normales y la activación la dispara la primera que ejecutes.
+    Lo que se sigue respetando es de quién es el turno y que cada unidad juega
+    una sola vez.
+  */
+  it('una unidad que puede empezar a jugar ya tiene sus acciones', () => {
     const s = estado({ a1: unit('a1', 'A', 10, 10) }, { unidadActiva: null });
+    expect(buscar(accionesDisponibles(s, s.units.a1, perfil()), 'Mover').disponible).toBe(true);
+  });
+
+  it('si le toca al rival, todo apagado y se dice de quién es el turno', () => {
+    const s = estado({ a1: unit('a1', 'A', 10, 10) }, { unidadActiva: null, jugadorActivo: 'B' });
     const l = accionesDisponibles(s, s.units.a1, perfil());
     expect(l.every((a) => !a.disponible)).toBe(true);
+    expect(l[0]!.motivo).toContain('ROJO');
+  });
+
+  it('una unidad que ya jugó este turno no puede volver', () => {
+    const s = estado(
+      { a1: unit('a1', 'A', 10, 10, { activated: true }) },
+      { unidadActiva: null },
+    );
+    const l = accionesDisponibles(s, s.units.a1, perfil());
+    expect(l.every((a) => !a.disponible)).toBe(true);
+    expect(l[0]!.motivo).toContain('Ya ha jugado');
+  });
+
+  it('con otra unidad a media activación, esta espera', () => {
+    const s = estado(
+      { a1: unit('a1', 'A', 10, 10), a2: unit('a2', 'A', 14, 10) },
+      { unidadActiva: 'a2' },
+    );
+    expect(accionesDisponibles(s, s.units.a1, perfil()).every((a) => !a.disponible)).toBe(true);
   });
 
   it('no se puede disparar a una unidad trabada desde fuera del combate', () => {

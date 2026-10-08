@@ -13,12 +13,15 @@ import {
   libreDeUnidades,
   poligonoDeVision,
   puedeDesplegarEn,
+  type ActionKind,
   type EnReserva,
   type GameState,
   type TipoTerreno,
   type Vec2,
 } from '@zerolore/core';
+import type { AccionDisponible } from './acciones.ts';
 import { caminoHasta, destinoDeMovimiento, otrasUnidades } from './colocacion.ts';
+import { RuedaAcciones } from './RuedaAcciones.tsx';
 import { MESA } from './setup.ts';
 import { colorVida } from './vida.ts';
 
@@ -163,6 +166,25 @@ export interface BoardProps {
   readonly origenAuras: Vec2 | null;
   /** Apuntando un disparo: se traza la trayectoria y se evalúa la cobertura. */
   readonly apuntandoDisparo: boolean;
+  /**
+   * Acciones de la unidad activada, para la rueda que la rodea. `null` cuando
+   * no toca enseñarla: sin unidad activada, o con una acción ya elegida.
+   */
+  readonly accionesRueda: readonly AccionDisponible[] | null;
+  readonly accionResaltada: ActionKind | null;
+  readonly onElegirAccion: (kind: ActionKind) => void;
+  readonly onResaltarAccion: (kind: ActionKind | null) => void;
+  readonly onTerminarActivacion: () => void;
+  /**
+   * Objetivo ya marcado de un ataque: se pinta un ✓ junto a él para rematar la
+   * acción. Sustituye al panel con botones, que era otro cuadro más.
+   */
+  readonly confirmarSobreObjetivo: { readonly unitId: string; readonly hacer: () => void } | null;
+  /** Movimiento sin confirmar: la rueda pregunta en vez de ofrecer acciones. */
+  readonly confirmacionMovimiento: {
+    readonly onAceptar: () => void;
+    readonly onDeshacer: () => void;
+  } | null;
   /** Unidad de la Reserva que se está colocando, si la hay. */
   readonly desplegando: EnReserva | null;
   readonly onDesplegar: (puestoId: string, posicion: Vec2) => void;
@@ -190,6 +212,13 @@ export function Board({
   objetivoElegido,
   origenAuras,
   apuntandoDisparo,
+  accionesRueda,
+  accionResaltada,
+  onElegirAccion,
+  onResaltarAccion,
+  onTerminarActivacion,
+  confirmacionMovimiento,
+  confirmarSobreObjetivo,
   desplegando,
   onDesplegar,
   previewMovimiento,
@@ -357,7 +386,7 @@ export function Board({
       mesa: MESA,
       terreno: state.terrain,
       puestos: state.puestos,
-      unidades: otrasUnidades(state, sel.id),
+      unidades: otrasUnidades(state, sel.id, modoAnillos === 'Correr'),
       iman: IMAN,
     };
 
@@ -482,7 +511,12 @@ export function Board({
       onPointerLeave={() => setFantasma(null)}
       onClick={colocar}
       onContextMenu={cancelar}
-      style={modoColocacion ? { cursor: 'crosshair' } : undefined}
+      /*
+        La proporción sale del mismo viewBox, para que la mesa quepa entera
+        tanto si sobra ancho como si sobra alto. Sin ella, al quitar las bandas
+        laterales el tablero se estiraba a lo ancho y se salía por abajo.
+      */
+      style={{ aspectRatio: `${w} / ${h}`, ...(modoColocacion ? { cursor: 'crosshair' as const } : {}) }}
       role="img"
       aria-label="Tablero de juego"
     >
@@ -997,6 +1031,40 @@ export function Board({
             />
             {u.id === seleccionada && (
               <circle cx={0} cy={0} r={r + 3} fill="none" stroke="#fff" strokeWidth={1.4} opacity={0.85} />
+            )}
+            {/* ✓ para rematar el ataque, pegado al objetivo elegido. */}
+            {confirmarSobreObjetivo?.unitId === u.id && (
+              <g
+                className="rueda-item aceptar confirmar-ataque"
+                transform={`translate(${r + 16}, ${-r - 16})`}
+                onClick={(e) => { e.stopPropagation(); confirmarSobreObjetivo.hacer(); }}
+              >
+                <circle className="fondo" cx={0} cy={0} r={14} />
+                <g className="icono" fill="none" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M-5.5 0 L-1.5 4.5 L6 -4.5" />
+                </g>
+              </g>
+            )}
+
+            {/* La rueda vive dentro del grupo de la unidad: la sigue sola. */}
+            {u.id === seleccionada && accionesRueda && (
+              <RuedaAcciones
+                acciones={accionesRueda}
+                radio={r}
+                desplazamiento={(() => {
+                  // Radio del anillo más el icono, para no cortarlo en el borde.
+                  const m = r + 28 + 17;
+                  return {
+                    x: Math.max(0, m - cx) + Math.min(0, w - (cx + m)),
+                    y: Math.max(0, m - cy) + Math.min(0, h - (cy + m)),
+                  };
+                })()}
+                resaltada={accionResaltada}
+                onElegir={onElegirAccion}
+                onResaltar={onResaltarAccion}
+                onTerminar={onTerminarActivacion}
+                confirmacion={confirmacionMovimiento}
+              />
             )}
             {!muerta && (
               <image
