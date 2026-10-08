@@ -12,13 +12,14 @@ export interface TiradaIniciativaProps {
   readonly tiradas: Readonly<Record<string, number>>;
   readonly orden: readonly string[];
   readonly jugadores: readonly string[];
+  readonly ritmo?: number;
   readonly onContinuar: () => void;
 }
 
 const NOMBRE: Record<string, string> = { A: 'AZUL', B: 'ROJO' };
 const COLOR: Record<string, string> = { A: '#3b82f6', B: '#ef4444' };
 
-export function TiradaIniciativa({ tiradas, orden, jugadores, onContinuar }: TiradaIniciativaProps) {
+export function TiradaIniciativa({ tiradas, orden, jugadores, ritmo = 1, onContinuar }: TiradaIniciativaProps) {
   const [parados, setParados] = useState(0);
   const revelada = parados >= jugadores.length;
   const ganador = orden[0];
@@ -39,7 +40,7 @@ export function TiradaIniciativa({ tiradas, orden, jugadores, onContinuar }: Tir
                 valor={tiradas[j] ?? 1}
                 color={COLOR[j] ?? '#e5e7eb'}
                 // El segundo dado tarda un poco más: una tirada a la vez se lee mejor.
-                duracion={1000 + i * 350}
+                duracion={(1000 + i * 350) * ritmo}
                 alParar={() => setParados((n) => n + 1)}
               />
               <span className="etiqueta">{gana ? 'activa primero' : ' '}</span>

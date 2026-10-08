@@ -39,6 +39,8 @@ export interface DueloProps {
   /** Daño extra repartido por Explosiva a otras miniaturas cercanas. */
   readonly explosiva: number;
   readonly destruido: boolean;
+  /** Multiplica las duraciones: menos de 1 es más rápido. */
+  readonly ritmo?: number;
   readonly onTerminar: () => void;
 }
 
@@ -50,7 +52,7 @@ const MS: Record<Fase, number> = { presenta: 500, ataque: 1500, repite: 1200, sa
 /** Dentro de cada fase, cuánto ruedan los dados antes de pararse y dejarse leer. */
 const MS_RODAR: Partial<Record<Fase, number>> = { ataque: 750, repite: 600, salva: 700 };
 
-export function Duelo({ atacante, defensor, partes, explosiva, destruido, onTerminar }: DueloProps) {
+export function Duelo({ atacante, defensor, partes, explosiva, destruido, ritmo = 1, onTerminar }: DueloProps) {
   const [iParte, setIParte] = useState(0);
   const [fase, setFase] = useState<Fase>('presenta');
   const [asentado, setAsentado] = useState(false);
@@ -93,8 +95,8 @@ export function Duelo({ atacante, defensor, partes, explosiva, destruido, onTerm
 
   useEffect(() => {
     setAsentado(false);
-    const parar = setTimeout(() => setAsentado(true), MS_RODAR[fase] ?? 0);
-    const avanzar = setTimeout(siguiente, MS[fase]);
+    const parar = setTimeout(() => setAsentado(true), (MS_RODAR[fase] ?? 0) * ritmo);
+    const avanzar = setTimeout(siguiente, MS[fase] * ritmo);
     return () => {
       clearTimeout(parar);
       clearTimeout(avanzar);

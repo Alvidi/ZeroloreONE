@@ -21,6 +21,7 @@ import { Prevision } from './hud/Prevision.tsx';
 import { Panel, FichaDetalle, type Carta } from './hud/Panel.tsx';
 import { Duelo, type DueloProps, type LadoDuelo } from './hud/Duelo.tsx';
 import { TiradaRapida } from './hud/TiradaRapida.tsx';
+import { Menu, type Modalidad } from './hud/Menu.tsx';
 import { rotulo } from './hud/nombres.ts';
 import { TiradaIniciativa } from './TiradaIniciativa.tsx';
 import { Hoja } from './Hoja.tsx';
@@ -93,6 +94,25 @@ export function App() {
   const [hover, setHover] = useState<string | null>(null);
   const [maquinas, setMaquinas] = useState<Record<PlayerId, boolean>>({ A: false, B: true });
   const [ajustes, setAjustes] = useState(false);
+  const [pantalla, setPantalla] = useState<'menu' | 'partida'>('menu');
+  const [empezada, setEmpezada] = useState(false);
+  const [rapido, setRapidoEstado] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('zerolore.rapido') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setRapido = (v: boolean): void => {
+    setRapidoEstado(v);
+    try {
+      localStorage.setItem('zerolore.rapido', v ? '1' : '0');
+    } catch {
+      // Sin almacenamiento solo se pierde la preferencia.
+    }
+  };
+  /** Las animaciones y las pausas de la IA se multiplican por esto. */
+  const ritmo = rapido ? 0.45 : 1;
   const [avisos, setAvisos] = useState<{ id: number; texto: string; tipo: string }[]>([]);
   const escena = useRef<Escena | null>(null);
   const [, setTic] = useState(0);
@@ -150,6 +170,13 @@ export function App() {
     ponerGuion(resto);
   }, [ponerGuion]);
 
+  const empezar = (m: Modalidad): void => {
+    setMaquinas(m === 'maquina-maquina' ? { A: true, B: true } : { A: false, B: true });
+    nueva();
+    setEmpezada(true);
+    setPantalla('partida');
+  };
+
   const nueva = (misma = false): void => {
     const s = misma ? semilla : semillaNueva();
     setSemilla(s);
@@ -165,17 +192,17 @@ export function App() {
   // ------------------------------------------------- Lo que va solo y la IA
 
   useEffect(() => {
-    if (ocupado) return undefined;
+    if (ocupado || pantalla !== 'partida') return undefined;
     const s = estado;
     let t: ReturnType<typeof setTimeout> | undefined;
     const despues = (ms: number, f: () => void): void => { t = setTimeout(f, ms); };
 
     if (s.fase === 'Terminada') return undefined;
-    if (s.fase === 'Iniciativa') despues(MS_TURNO, () => ejecutar({ type: 'TirarIniciativa' }));
-    else if (s.fase === 'FinDeTurno') despues(MS_TURNO, () => ejecutar({ type: 'TerminarTurno' }));
+    if (s.fase === 'Iniciativa') despues(MS_TURNO * ritmo, () => ejecutar({ type: 'TirarIniciativa' }));
+    else if (s.fase === 'FinDeTurno') despues(MS_TURNO * ritmo, () => ejecutar({ type: 'TerminarTurno' }));
     else if (s.jugadorActivo && maquinas[s.jugadorActivo]) {
       const j = s.jugadorActivo;
-      despues(MS_IA, () => {
+      despues(MS_IA * ritmo, () => {
         const jugada = siguienteJugada(motor.current.getState(), j);
         const actual = motor.current.getState();
         if (jugada) {
@@ -196,7 +223,7 @@ export function App() {
       }
     }
     return () => clearTimeout(t);
-  }, [estado, ocupado, maquinas, modo.k, ejecutar]);
+  }, [estado, ocupado, maquinas, modo.k, ejecutar, pantalla, ritmo]);
 
   // Al acabar la activación o cambiar de turno, se limpia lo que estuviera a medias.
   useEffect(() => {
@@ -532,6 +559,16 @@ export function App() {
   // ---------------------------------------------------------------- Pintar
 
   const paso = guion[0];
+  if (pantalla === 'menu') {
+    return (
+      <Menu
+        rapido={rapido}
+        onRapido={setRapido}
+        onEmpezar={empezar}
+        onSeguir={empezada && estado.fase !== 'Terminada' ? () => setPantalla('partida') : null}
+      />
+    );
+  }
   return (
     <div className={`app turno-${estado.jugadorActivo ?? 'nadie'}`} style={{ ['--turno' as string]: estado.jugadorActivo ? CSS_JUGADOR[estado.jugadorActivo] : '#475569' }}>
       {/* El marcador enseña lo que se ve, no lo que ya ha pasado: si no, canta el resultado del dado. */}
@@ -566,17 +603,20 @@ export function App() {
       />
 
       {paso?.k === 'iniciativa' && (
-        <IniciativaSola key={paso.id} paso={paso} jugadores={estado.jugadores} onTerminar={avanzarGuion} />
+        <IniciativaSola key={paso.id} paso={paso} jugadores={estado.jugadores} ritmo={ritmo} onTerminar={avanzarGuion} />
       )}
-      {paso?.k === 'duelo' && <Duelo key={paso.id} {...paso.props} onTerminar={avanzarGuion} />}
+      {paso?.k === 'duelo' && <Duelo key={paso.id} {...paso.props} ritmo={ritmo} onTerminar={avanzarGuion} />}
       {paso?.k === 'tirada' && (
-        <TiradaRapida key={paso.id} titulo={paso.titulo} valor={paso.valor} necesita={paso.necesita} color={paso.color} onTerminar={avanzarGuion} />
+        <TiradaRapida key={paso.id} titulo={paso.titulo} valor={paso.valor} necesita={paso.necesita} color={paso.color} ritmo={ritmo} onTerminar={avanzarGuion} />
       )}
       {paso?.k === 'fin' && (
         <Hoja titulo="Partida terminada" subtitulo={paso.ganador ? `Gana ${NOMBRE_JUGADOR[paso.ganador]}` : 'Empate'}>
           <p className="fin-motivo">{paso.motivo}</p>
           <p className="fin-puntos">Azul {estado.puntos.A ?? 0} · Rojo {estado.puntos.B ?? 0}</p>
-          <button className="grande" onClick={() => nueva()}>Nueva partida</button>
+          <div className="partida-botones">
+            <button className="grande" onClick={() => nueva()}>Otra partida igual</button>
+            <button onClick={() => setPantalla('menu')}>Volver al menú</button>
+          </div>
         </Hoja>
       )}
 
@@ -590,9 +630,14 @@ export function App() {
               </label>
             ))}
           </div>
+          <label className="ia-bando">
+            <input type="checkbox" checked={rapido} onChange={(e) => setRapido(e.target.checked)} />
+            <span>Ritmo rápido</span>
+          </label>
           <div className="partida-botones">
             <button className="grande" onClick={() => { nueva(); setAjustes(false); }}>Nueva partida</button>
             <button onClick={() => { nueva(true); setAjustes(false); }}>Repetir con esta semilla</button>
+            <button onClick={() => { setAjustes(false); setPantalla('menu'); }}>Volver al menú</button>
           </div>
         </Hoja>
       )}
@@ -617,16 +662,17 @@ function objetivoCercano(estado: GameState, validos: readonly string[], p: Vec2)
 }
 
 /** La tirada de iniciativa se cierra sola en cuanto se ha visto quién empieza. */
-function IniciativaSola({ paso, jugadores, onTerminar }: {
+function IniciativaSola({ paso, jugadores, ritmo, onTerminar }: {
   paso: Extract<Paso, { k: 'iniciativa' }>;
   jugadores: readonly string[];
+  ritmo: number;
   onTerminar: () => void;
 }) {
   useEffect(() => {
-    const t = setTimeout(onTerminar, 2900);
+    const t = setTimeout(onTerminar, 2900 * ritmo);
     return () => clearTimeout(t);
-  }, [onTerminar]);
-  return <TiradaIniciativa tiradas={paso.tiradas} orden={paso.orden} jugadores={jugadores} onContinuar={onTerminar} />;
+  }, [onTerminar, ritmo]);
+  return <TiradaIniciativa tiradas={paso.tiradas} orden={paso.orden} jugadores={jugadores} ritmo={ritmo} onContinuar={onTerminar} />;
 }
 
 // --------------------------------------------------------------- El guion

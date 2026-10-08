@@ -57,7 +57,8 @@ export function DadoRodando({ valor, color, tam = 64, duracion = 1100, alParar }
   }, [valor, duracion]);
 
   return (
-    <span className={`dado-rodando ${rodando ? 'rueda' : 'para'}`}>
+    // "rodando" y no "rueda": esa clase es la de la rueda de acciones y le robaba el estilo.
+    <span className={`dado-rodando ${rodando ? 'rodando' : 'parado'}`}>
       <Dado valor={cara} color={color} tam={tam} />
     </span>
   );

@@ -5,11 +5,12 @@ import { DadoRodando } from '../DadoRodando.tsx';
  * Una tirada suelta de un dado —carga, destrabarse— en mitad de la mesa. Rueda,
  * se para, dice si sale y se va sola.
  */
-export function TiradaRapida({ titulo, valor, necesita, color, onTerminar }: {
+export function TiradaRapida({ titulo, valor, necesita, color, ritmo = 1, onTerminar }: {
   titulo: string;
   valor: number;
   necesita: number;
   color: string;
+  ritmo?: number;
   onTerminar: () => void;
 }) {
   const [parado, setParado] = useState(false);
@@ -19,15 +20,15 @@ export function TiradaRapida({ titulo, valor, necesita, color, onTerminar }: {
 
   useEffect(() => {
     if (!parado) return undefined;
-    const t = setTimeout(() => terminar.current(), 900);
+    const t = setTimeout(() => terminar.current(), 900 * ritmo);
     return () => clearTimeout(t);
-  }, [parado]);
+  }, [parado, ritmo]);
 
   return (
     <div className="tirada-rapida" onClick={() => terminar.current()}>
       <div className={`caja ${parado ? (exito ? 'exito' : 'fallo') : ''}`}>
         <span className="titulo">{titulo}</span>
-        <DadoRodando valor={valor} color={color} tam={72} duracion={800} alParar={() => setParado(true)} />
+        <DadoRodando valor={valor} color={color} tam={72} duracion={800 * ritmo} alParar={() => setParado(true)} />
         <span className="necesita">{necesita}+</span>
         <b className="resultado">{parado ? (exito ? '¡Sale!' : 'Falla') : ' '}</b>
       </div>
