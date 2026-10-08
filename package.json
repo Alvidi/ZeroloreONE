@@ -3,12 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b",
-    "sim": "node --experimental-strip-types packages/core/src/cli/sim.ts"
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p packages/data --noEmit && tsc -p apps/web --noEmit",
+    "sim": "node --experimental-strip-types --no-warnings scripts/sim.ts",
+    "sync": "node scripts/sync-web.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

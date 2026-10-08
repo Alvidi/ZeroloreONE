@@ -1,752 +1,465 @@
 :root {
   color-scheme: dark;
-  --bg: #12161c;
-  --panel: #1a2029;
-  --line: #2b323c;
-  --text: #e5e7eb;
-  --muted: #94a3b8;
-  --a: #3b82f6;
-  --b: #ef4444;
+  --fondo: #0b0f14;
+  --panel: #141a22;
+  --panel-2: #1a222c;
+  --linea: #263040;
+  --texto: #e5e7eb;
+  --tenue: #94a3b8;
+  --azul: #3b82f6;
+  --rojo: #ef4444;
+  --oro: #f5c451;
+  --verde: #22c55e;
+  --turno: #475569;
 }
 
 * { box-sizing: border-box; }
 
+html, body, #root { height: 100%; }
+
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--fondo);
+  color: var(--texto);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+  user-select: none;
 }
 
-/*
-  Cada bando en su lado de la pantalla y el marcador arriba. En una partida
-  local el jugador mira siempre al mismo sitio, y el color del que juega manda
-  sobre el borde de la mesa y sobre su banda.
-*/
+button { font: inherit; color: inherit; cursor: pointer; }
+
+/* --------------------------------------------------------------- Disposición */
+
 .app {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 10px; padding: 10px;
-  height: 100dvh; width: 100vw; overflow: hidden;
+  height: 100dvh;
+  width: 100vw;
 }
 
-/*
-  Marcador: un solo bloque centrado con el tanteo de los dos bandos y el turno
-  en medio. El botón de fase va debajo y los ajustes a la esquina, que no son
-  parte de la partida.
-*/
+.mesa { position: relative; min-height: 0; overflow: hidden; }
+.tablero { position: absolute; inset: 0; }
+.tablero canvas { display: block; }
+
+/* ----------------------------------------------------------------- Marcador */
+
 .marcador {
-  grid-column: 1; grid-row: 1;
   position: relative;
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  display: flex;
+  justify-content: center;
+  padding: 8px 12px 4px;
 }
 .marcador .tanteo {
-  display: flex; align-items: stretch; gap: 1px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  display: flex;
+  align-items: stretch;
+  background: var(--panel);
+  border: 1px solid var(--linea);
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 6px 24px -12px #000;
 }
 .marcador .equipo {
   display: flex; align-items: center; gap: 8px;
-  padding: 7px 16px; min-width: 132px;
+  padding: 7px 18px; min-width: 128px;
+  transition: background .3s;
 }
 .marcador .equipo.derecha { justify-content: flex-end; }
-.marcador .equipo .nombre { font-weight: 800; letter-spacing: .08em; font-size: 11px; }
-.marcador .equipo.pA .nombre { color: var(--a); }
-.marcador .equipo.pB .nombre { color: var(--b); }
-.marcador .equipo .puntos { font-size: 22px; line-height: 1; }
-.marcador .equipo .maquina {
-  font-size: 8px; letter-spacing: .1em; color: var(--muted);
-  border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px;
+.marcador .nombre { font-weight: 800; letter-spacing: .1em; font-size: 11px; text-transform: uppercase; }
+.marcador .pA .nombre { color: var(--azul); }
+.marcador .pB .nombre { color: var(--rojo); }
+.marcador .puntos { font-size: 22px; line-height: 1; font-variant-numeric: tabular-nums; }
+.marcador .maquina {
+  font-size: 8px; letter-spacing: .12em; color: var(--tenue);
+  border: 1px solid var(--linea); border-radius: 4px; padding: 1px 4px;
 }
-/*
-  A quién le toca se dice con el fondo encendido, no con una chapa que diga
-  "juega": una palabra menos que leer en cada turno.
-*/
-.marcador .equipo.pA.juega { background: color-mix(in srgb, var(--a) 22%, transparent); }
-.marcador .equipo.pB.juega { background: color-mix(in srgb, var(--b) 22%, transparent); }
-.marcador .equipo.pA.juega .puntos { color: #bfdbfe; }
-.marcador .equipo.pB.juega .puntos { color: #fecaca; }
-
+.marcador .pA.juega { background: color-mix(in srgb, var(--azul) 24%, transparent); }
+.marcador .pB.juega { background: color-mix(in srgb, var(--rojo) 24%, transparent); }
 .marcador .centro {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 1px; padding: 6px 18px;
-  background: #10161e;
+  padding: 5px 20px; background: #0f141b; min-width: 120px;
 }
-.marcador .centro .turno { font-weight: 700; font-size: 12px; }
-.marcador .centro .turno i { font-style: normal; font-weight: 400; color: var(--muted); }
-.marcador .centro .fase {
-  color: var(--muted); text-transform: uppercase; font-size: 9px; letter-spacing: .1em;
+.marcador .turno { font-weight: 700; font-size: 13px; }
+.marcador .turno i { font-style: normal; color: var(--tenue); font-weight: 400; }
+.marcador .fase { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--tenue); }
+.marcador .ajustes {
+  position: absolute; right: 12px; top: 10px;
+  width: 34px; height: 34px; border-radius: 9px;
+  background: var(--panel); border: 1px solid var(--linea); color: var(--tenue);
 }
-/*
-  Flotando, no en el flujo: apareciendo y desapareciendo cada turno cambiaba el
-  alto de la cabecera y el tablero entero se reajustaba en cada fase.
-*/
-.marcador .accion-fase {
-  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
-  margin-top: 6px; z-index: 30; white-space: nowrap;
-}
-.marcador .ajustes { position: absolute; right: 0; top: 0; }
+.marcador .ajustes:hover { color: var(--texto); }
 
-/* --- Banda de compañía: las dos listas abajo y, en medio, lo que miras --- */
-/*
-  Las tres piezas van agrupadas en el centro, no pegadas a los bordes: jugando
-  solo, mirar a una esquina y luego a la otra cansa. Las compañías se arriman
-  al centro y la ficha manda el ancho del grupo.
-*/
-.banda {
-  grid-column: 1; grid-row: 3;
-  display: grid; grid-auto-flow: column; grid-auto-columns: auto;
-  justify-content: center;
-  gap: 10px; align-items: stretch;
-  min-height: 124px;
+/* -------------------------------------------------------- Capas sobre la mesa */
+
+.rueda { position: absolute; width: 0; height: 0; z-index: 20; pointer-events: none; }
+.rueda-boton {
+  position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #273244, #121821);
+  border: 2px solid var(--turno);
+  color: #fff;
+  box-shadow: 0 4px 14px -4px #000, 0 0 0 3px rgba(0, 0, 0, .35);
+  pointer-events: auto;
+  animation: brota .26s cubic-bezier(.2, 1.4, .5, 1) both;
+  transition: transform .12s, box-shadow .12s;
 }
-.banda-centro {
-  display: flex; align-items: stretch; justify-content: center;
-  /*
-    Ancho fijo, no "lo que ocupe la ficha": si el hueco crece al seleccionar una
-    unidad, la compañía entera se desplaza de sitio y pierdes de vista el token
-    que acabas de pulsar.
-  */
-  width: min(760px, 62vw); min-width: 0;
+.rueda-boton:hover { transform: scale(1.14); box-shadow: 0 0 18px -2px var(--turno), 0 0 0 3px rgba(0, 0, 0, .35); }
+.rueda-boton.apagada { opacity: .32; filter: grayscale(1); cursor: not-allowed; }
+.rueda-boton.apagada:hover { transform: none; box-shadow: none; }
+.rueda-boton.terminar { border-color: #64748b; }
+.rueda-boton .coste {
+  position: absolute; right: -4px; bottom: -4px;
+  font-size: 9px; font-weight: 800; width: 15px; height: 15px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--oro); color: #111;
+}
+@keyframes brota { from { opacity: 0; transform: scale(.3); } }
+.rueda-rotulo {
+  position: absolute; left: 0; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  white-space: nowrap; pointer-events: none;
+  background: rgba(11, 15, 20, .92); border: 1px solid var(--linea);
+  border-radius: 8px; padding: 4px 10px;
+}
+.rueda-rotulo b { font-size: 12px; }
+.rueda-rotulo span { font-size: 10px; color: var(--tenue); }
+.rueda-acciones {
+  position: absolute; left: 0; top: 0; transform: translate(-50%, -50%);
+  display: flex; gap: 3px; pointer-events: none;
+}
+.rueda-acciones i { width: 7px; height: 7px; border-radius: 50%; background: #334155; border: 1px solid #0b0f14; }
+.rueda-acciones i.llena { background: var(--oro); }
+
+.confirmar-mover {
+  position: absolute; z-index: 21; display: flex; gap: 8px;
+  transform: translate(8px, -50%);
+}
+.confirmar-mover button {
+  width: 40px; height: 40px; border-radius: 50%; font-size: 18px; font-weight: 800;
+  border: 2px solid; box-shadow: 0 6px 16px -6px #000;
+  animation: brota .2s cubic-bezier(.2, 1.4, .5, 1) both;
+}
+.confirmar-mover .si { background: #14532d; border-color: var(--verde); }
+.confirmar-mover .si.apagada { background: #3f1d1d; border-color: var(--rojo); opacity: .8; }
+.confirmar-mover .no { background: #1f2937; border-color: #64748b; }
+.confirmar-mover .motivo {
+  position: absolute; top: 46px; left: 0; white-space: nowrap;
+  font-size: 11px; color: #fecaca; background: rgba(63, 29, 29, .92); border-radius: 6px; padding: 3px 8px;
 }
 
-.compania {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 7px 9px; display: flex; flex-direction: column; gap: 6px;
+.etiqueta-unidad {
+  position: absolute; z-index: 15; transform: translateX(-50%);
+  white-space: nowrap; pointer-events: none;
+  font-size: 11px; background: rgba(11, 15, 20, .9);
+  border: 1px solid var(--linea); border-left: 3px solid var(--equipo);
+  border-radius: 6px; padding: 2px 8px;
 }
-.compania.pA.de-turno { border-color: var(--a); box-shadow: 0 0 20px -8px var(--a); }
-.compania.pB.de-turno { border-color: var(--b); box-shadow: 0 0 20px -8px var(--b); }
-.compania > header { display: flex; align-items: baseline; gap: 8px; }
-.compania > header .equipo { font-weight: 800; letter-spacing: .08em; font-size: 12px; }
-.compania.pA > header .equipo { color: var(--a); }
-.compania.pB > header .equipo { color: var(--b); }
-.compania > header .dato,
-.compania > header .maquina {
-  font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em;
-}
-.compania > header .maquina { border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
-.compania.pB { align-items: flex-end; }
-.compania.pB > header { flex-direction: row-reverse; }
+.etiqueta-unidad i { font-style: normal; color: var(--tenue); }
+.etiqueta-unidad span { color: var(--tenue); margin-left: 4px; font-variant-numeric: tabular-nums; }
 
-/* Una ficha por unidad: retrato, galones de vida y el estado encima. */
-.compania .tropas { display: flex; gap: 6px; }
-.compania .tropa {
-  position: relative; width: 66px; margin: 0; padding: 5px 5px 0;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  background: #151a22; border: 1px solid #323b47; border-radius: 7px;
-  cursor: pointer; overflow: hidden;
+.avisos {
+  position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 30;
+  display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none;
 }
-.compania.pA .tropa { border-bottom: 3px solid color-mix(in srgb, var(--a) 55%, #323b47); }
-.compania.pB .tropa { border-bottom: 3px solid color-mix(in srgb, var(--b) 55%, #323b47); }
-.compania .tropa img { width: 46px; height: 46px; object-fit: contain; opacity: .92; }
-.compania .tropa:hover:not(:disabled) { border-color: #94a3b8; }
-.compania .tropa.sel { border-color: #fff; box-shadow: inset 0 0 0 1px #fff; }
-.compania .tropa.activa { box-shadow: 0 0 14px -4px var(--turno), inset 0 0 0 1px var(--turno); }
-.compania .tropa.dormida { opacity: .45; }
-.compania .tropa.muerta { opacity: .5; border-color: #7f1d1d; }
-.compania .tropa.muerta img { filter: grayscale(1); }
-/* La reserva se ve que aún no está en mesa: contorno cortado y sin fondo. */
-.compania .tropa.reserva { background: transparent; border-style: dashed; cursor: grab; touch-action: none; }
-.compania .tropa.reserva.elegida { border-color: #22c55e; background: #14321f; cursor: grabbing; }
-.compania .tropa.bloqueada { opacity: .32; cursor: default; }
-
-.compania .galones { display: flex; gap: 2px; width: 100%; padding: 0 2px 3px; }
-.compania .galones i {
-  flex: 1; height: 4px; border-radius: 2px; background: #33404f;
+.aviso {
+  font-size: 12px; padding: 6px 12px; border-radius: 8px;
+  background: rgba(20, 26, 34, .95); border: 1px solid var(--linea);
+  animation: baja .25s ease-out both;
 }
-.compania .galones i.lleno { background: #22c55e; }
-.compania .tropa.muerta .galones i { background: #33404f; }
+.aviso.error { border-color: #7f1d1d; color: #fecaca; }
+.aviso.puesto { border-color: var(--oro); color: #fde68a; }
+@keyframes baja { from { opacity: 0; transform: translateY(-8px); } }
 
-.compania .marca {
-  position: absolute; top: 2px; right: 4px;
-  font-size: 12px; font-weight: 800; line-height: 1; color: var(--muted);
+.banner {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--tenue);
+  background: rgba(20, 26, 34, .9); border: 1px solid var(--linea); border-radius: 999px; padding: 5px 14px;
 }
-.compania .marca.zz { color: #94a3b8; }
-.compania .marca.cac { color: #f59e0b; }
-.compania .tropa.muerta .marca { color: #ef4444; }
 
-/* --- Previsión de combate: atacante a la izquierda, defensor a la derecha --- */
+/* -------------------------------------------------------------------- Panel */
+
+.panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2.2fr) minmax(220px, .9fr);
+  gap: 10px;
+  padding: 0 10px 10px;
+  height: 188px;
+}
+.panel > section {
+  background: var(--panel); border: 1px solid var(--linea); border-radius: 12px;
+  padding: 9px 11px; min-width: 0; min-height: 0;
+}
+.panel h3 {
+  margin: 0 0 6px; display: flex; align-items: center; gap: 6px;
+  font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--tenue);
+}
+.panel h3 i { font-style: normal; color: #64748b; }
+.panel .vacio { font-size: 11px; color: #64748b; }
+.panel .centro { display: flex; align-items: stretch; justify-content: center; }
+.panel .pista { align-self: center; color: var(--tenue); font-size: 13px; }
+
+.ejercito { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+.ejercito .grupo h3 { margin-bottom: 4px; }
+.ejercito .fichas { display: flex; flex-wrap: wrap; gap: 6px; }
+.ejercito .pasar {
+  margin-left: auto; font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  background: #14532d; border: 1px solid var(--verde); border-radius: 6px; padding: 2px 10px;
+}
+
+.ficha-unidad {
+  position: relative; width: 52px; height: 58px; padding: 4px 4px 0;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: #0f141b; border: 1px solid #2c3746; border-radius: 9px;
+  border-bottom: 3px solid color-mix(in srgb, var(--azul) 60%, #2c3746);
+}
+.ficha-unidad img { width: 38px; height: 38px; border-radius: 6px; }
+.ficha-unidad .barra { width: 100%; height: 4px; background: #1f2937; border-radius: 2px; overflow: hidden; }
+.ficha-unidad .barra i { display: block; height: 100%; }
+.ficha-unidad .cuenta {
+  position: absolute; right: -5px; top: -5px; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 9px; background: #1e293b; border: 1px solid #334155; font-size: 10px; font-weight: 700;
+  display: grid; place-items: center;
+}
+.ficha-unidad .corona { position: absolute; left: 3px; top: 1px; font-size: 10px; color: var(--oro); }
+.ficha-unidad .marca { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-weight: 800; color: #cbd5e1; text-shadow: 0 0 4px #000; }
+.ficha-unidad .marca.cac { color: var(--rojo); }
+.ficha-unidad:hover { border-color: #64748b; }
+.ficha-unidad.sel { border-color: #fff; box-shadow: inset 0 0 0 1px #fff; }
+.ficha-unidad.activa { box-shadow: 0 0 14px -2px var(--oro); border-color: var(--oro); }
+.ficha-unidad.dormida img { opacity: .4; }
+.ficha-unidad.reserva { background: transparent; border-style: dashed; border-bottom-style: dashed; height: 50px; cursor: grab; touch-action: none; }
+.ficha-unidad.reserva.en-mano { border-color: var(--verde); background: #12301e; }
+.ficha-unidad.reserva.bloqueada { opacity: .35; cursor: default; }
+
+.equipo .cartas { display: flex; gap: 7px; flex-wrap: wrap; }
+.carta {
+  width: 74px; padding: 6px 5px 5px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: linear-gradient(160deg, #222b38, #121821);
+  border: 1px solid #3b4a5e; border-radius: 9px; text-align: center;
+  transition: transform .15s;
+}
+.carta img { width: 34px; height: 34px; border-radius: 6px; }
+.carta b { font-size: 10px; line-height: 1.15; }
+.carta .coste { font-size: 9px; color: var(--oro); letter-spacing: .06em; }
+.carta:hover { transform: translateY(-3px); }
+.carta.apagada { opacity: .55; cursor: help; }
+
+/* --------------------------------------------------------------------- Ficha */
+
+.ficha { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; width: 100%; }
+.ficha .cabecera { display: flex; align-items: center; gap: 10px; }
+.ficha .cabecera img { width: 56px; height: 56px; border-radius: 10px; border: 2px solid var(--linea); }
+.ficha.pA .cabecera img { border-color: var(--azul); }
+.ficha.pB .cabecera img { border-color: var(--rojo); }
+.ficha .nombre { font-size: 17px; display: block; }
+.ficha .detalle { font-size: 11px; color: var(--tenue); display: block; }
+.vida { display: flex; align-items: center; gap: 7px; }
+.vida .barra { width: 120px; height: 7px; background: #0b1220; border-radius: 4px; overflow: hidden; }
+.vida .barra > div { height: 100%; transition: width .6s ease, background .6s; }
+.vida .cifras { font-weight: 700; font-variant-numeric: tabular-nums; }
+.vida .cifras i { font-style: normal; color: var(--tenue); font-weight: 400; }
+.ficha .valores { display: flex; align-items: baseline; gap: 13px; }
+.ficha .valor b { font-size: 16px; }
+.ficha .valor i { font-style: normal; font-size: 9px; color: var(--tenue); text-transform: uppercase; margin-left: 2px; }
+.ficha .pips { display: flex; gap: 3px; flex-wrap: wrap; max-width: 140px; }
+.ficha .pips i { width: 9px; height: 9px; border-radius: 50%; }
+.ficha .pips i.comandante { outline: 1.5px solid var(--oro); }
+.ficha .armas { display: flex; flex-direction: column; gap: 2px; }
+.ficha .armas .sub { font-size: 9px; color: var(--tenue); text-transform: uppercase; letter-spacing: .1em; margin-top: 2px; }
+.ficha .arma { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; }
+.ficha .arma .tipo { color: var(--tenue); width: 14px; }
+.ficha .arma b { font-size: 13px; }
+.ficha .hab, .chapas span {
+  font-size: 10px; color: var(--oro); border: 1px solid #5a4514; border-radius: 4px; padding: 0 5px; cursor: help;
+}
+.ficha .habilidad { font-size: 11px; color: var(--tenue); max-width: 280px; }
+.ficha .habilidad b { color: var(--texto); }
+
+/* ---------------------------------------------------------------- Previsión */
+
 .prevision {
-  flex: 1 1 auto; min-width: 0;
-  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 10px; align-items: center;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 7px 10px;
+  width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; align-items: center;
 }
-.prevision .bando { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.prevision .bando.defensor { flex-direction: row-reverse; text-align: right; }
-.prevision .retrato {
-  width: 40px; height: 40px; object-fit: contain; flex: none;
-  border-radius: 7px; padding: 2px; background: #151a22; border: 1px solid #323b47;
-}
-.prevision .bando.pA .retrato { border-color: color-mix(in srgb, var(--a) 60%, #323b47); }
-.prevision .bando.pB .retrato { border-color: color-mix(in srgb, var(--b) 60%, #323b47); }
-.prevision .datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.prevision .quien { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.prevision .bando.defensor .quien { flex-direction: row-reverse; }
-.prevision .quien b { font-size: 13px; white-space: nowrap; }
-.prevision .quien i { font-size: 9px; color: var(--muted); font-style: normal; white-space: nowrap; }
-.prevision .vida { display: flex; align-items: center; gap: 6px; }
-.prevision .bando.defensor .vida { flex-direction: row-reverse; }
-.prevision .vida .barra {
-  width: 84px; height: 6px; border-radius: 3px; background: #33404f; overflow: hidden;
-}
-.prevision .bando.defensor .vida .barra > div { margin-left: auto; }
-.prevision .vida .barra > div { height: 100%; }
-.prevision .vida .cifras { font-size: 11px; font-weight: 700; }
-.prevision .vida .cifras i { font-style: normal; color: var(--muted); font-weight: 400; }
-.prevision .pie { font-size: 10px; color: var(--muted); white-space: nowrap; }
-.prevision .aviso-cobertura {
-  font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
-  color: #fbbf24;
-}
-
+.prevision .bando { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.prevision .bando.derecha { flex-direction: row-reverse; text-align: right; }
+.prevision .bando.derecha .vida { flex-direction: row-reverse; }
+.prevision .retrato { width: 58px; height: 58px; border-radius: 10px; border: 2px solid var(--equipo); }
+.prevision .datos { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.prevision .quien i { font-style: normal; font-size: 10px; color: var(--equipo); text-transform: uppercase; letter-spacing: .1em; }
+.prevision .quien b { font-size: 14px; }
+.prevision .detalle { font-size: 10px; color: var(--tenue); }
+.prevision .vida .barra { width: 100px; }
 .prevision .cuentas { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.prevision .titular { display: flex; align-items: baseline; gap: 6px; }
-.prevision .titular .etiqueta,
-.prevision .titular .rango { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.prevision .titular .grande { font-size: 26px; line-height: 1; }
-.prevision dl { display: flex; gap: 12px; margin: 0; }
-.prevision dl > div { display: flex; align-items: baseline; gap: 4px; }
-.prevision dt { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.prevision dd { margin: 0; font-size: 12px; font-weight: 700; }
-.prevision dd i { font-style: normal; font-weight: 400; font-size: 10px; color: var(--muted); }
-.prevision dl > div.mata dd { color: #22c55e; }
-
-.prevision .modificadores { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
-.prevision .ataques { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.prevision .mod {
-  font-size: 9px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
-  color: var(--muted); cursor: help;
-}
-.prevision .mod.favor { color: #22c55e; border-color: #14532d; }
-.prevision .mod.contra { color: #fbbf24; border-color: #78350f; }
-
+.prevision .titular { display: flex; align-items: baseline; gap: 8px; }
+.prevision .etiqueta, .prevision .rango { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--tenue); }
+.prevision .grande { font-size: 30px; line-height: 1; }
+.prevision .probabilidades { display: flex; gap: 14px; font-size: 11px; color: var(--tenue); }
+.prevision .probabilidades b { color: var(--texto); }
+.prevision .probabilidades .mata b { color: var(--verde); }
+.prevision .partes { display: flex; flex-direction: column; gap: 1px; font-size: 11px; }
+.prevision .parte { display: flex; gap: 10px; color: var(--tenue); }
+.prevision .parte .quien { width: 72px; text-align: right; color: #64748b; }
+.prevision .parte i { font-style: normal; color: #64748b; }
+.prevision .parte .media { color: var(--texto); font-weight: 700; }
+.prevision .aviso-carga { font-size: 11px; color: #fde68a; }
+.chapas { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; max-width: 360px; }
+.chapas span { color: var(--tenue); border-color: var(--linea); }
+.chapas .favor { color: #86efac; border-color: #14532d; }
+.chapas .contra { color: #fcd34d; border-color: #78350f; }
 .prevision .botones { display: flex; gap: 6px; margin-top: 2px; }
 .prevision .confirmar {
-  width: auto; margin: 0; min-height: 30px; padding: 5px 14px;
-  font-size: 12px; font-weight: 700;
-  background: #166534; border: 1px solid #22c55e; border-radius: 7px; color: #fff;
+  padding: 6px 18px; font-weight: 800; border-radius: 8px;
+  background: #14532d; border: 1px solid var(--verde);
 }
-.prevision .confirmar:hover { background: #15803d; }
-.prevision .cancelar {
-  width: auto; margin: 0; min-height: 30px; padding: 5px 10px;
-  background: #1b212a; border: 1px solid #323b47; border-radius: 7px; color: var(--muted);
-}
+.prevision .confirmar:hover { background: #166534; }
+.prevision .cancelar { padding: 6px 12px; border-radius: 8px; background: #1f2937; border: 1px solid #334155; }
 
-.board-wrap {
-  grid-column: 1; grid-row: 2;
-  position: relative; display: grid; place-items: center;
-  min-width: 0; min-height: 0;
-}
-.board {
-  width: auto; height: auto; max-width: 100%; max-height: 100%;
-  box-shadow: 0 0 0 3px var(--turno), 0 0 26px -4px var(--turno);
-}
-.app.turno-nadie .board { box-shadow: none; }
-.hud-boton {
-  width: auto; margin: 0; min-height: 34px; padding: 7px 13px;
-  font-size: 12px; font-weight: 700;
-  background: #1d4ed8; border: 1px solid #1d4ed8; border-radius: 8px; color: #fff;
-}
-.hud-boton:hover:not(:disabled) { background: #2563eb; }
-.hud-boton:disabled { opacity: .45; cursor: not-allowed; }
-.hud-boton.icono { padding: 7px 10px; }
-.hud-pista {
-  position: absolute; left: 50%; transform: translateX(-50%); top: 10px; z-index: 40;
-  display: flex; align-items: center; gap: 10px;
-  background: rgba(18, 23, 30, .95); border: 1px solid var(--line);
-  border-radius: 8px; padding: 8px 12px; font-size: 12px;
-}
-.hud-pista button { width: auto; margin: 0; padding: 5px 10px; font-size: 11px; }
+/* -------------------------------------------------------------------- Duelo */
 
-/* --- Hojas emergentes --- */
+.duelo {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; flex-direction: column; align-items: stretch; justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(8, 11, 16, .72), rgba(4, 6, 9, .9));
+  animation: aparece .2s ease-out both;
+  cursor: pointer;
+}
+@keyframes aparece { from { opacity: 0; } }
+.duelo-banda {
+  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 1.4fr) minmax(0, 1fr);
+  align-items: center; gap: 18px;
+  padding: 28px 36px;
+  background:
+    linear-gradient(100deg, color-mix(in srgb, var(--azul) 18%, transparent) 0 30%, transparent 30% 70%, color-mix(in srgb, var(--rojo) 18%, transparent) 70%),
+    linear-gradient(180deg, #121821, #0d1219);
+  border-top: 1px solid #2b3646; border-bottom: 1px solid #2b3646;
+  box-shadow: 0 30px 80px -30px #000;
+}
+.duelo-lado { display: flex; align-items: center; gap: 16px; animation: entraIzq .35s cubic-bezier(.2, 1, .3, 1) both; }
+.duelo-lado.defensor { flex-direction: row-reverse; text-align: right; animation-name: entraDer; }
+.duelo-lado.defensor .vida { flex-direction: row-reverse; }
+@keyframes entraIzq { from { opacity: 0; transform: translateX(-60px); } }
+@keyframes entraDer { from { opacity: 0; transform: translateX(60px); } }
+.duelo-lado .retrato {
+  width: 128px; height: 128px; flex: none; border-radius: 18px; overflow: hidden;
+  border: 3px solid var(--equipo);
+  box-shadow: 0 0 40px -10px var(--equipo);
+}
+.duelo-lado .retrato img { width: 100%; height: 100%; display: block; }
+.duelo-lado.golpeado .retrato { animation: golpe .45s ease; }
+@keyframes golpe {
+  15% { transform: translateX(-10px) rotate(-2deg); filter: brightness(2) saturate(.3); }
+  35% { transform: translateX(8px) rotate(1.5deg); }
+  60% { transform: translateX(-4px); filter: none; }
+}
+.duelo-lado .datos { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.duelo-lado .bando { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--equipo); }
+.duelo-lado .nombre { font-size: 22px; line-height: 1.1; }
+.duelo-lado .detalle { font-size: 11px; color: var(--tenue); }
+.duelo-lado .vida .barra { width: 170px; height: 10px; }
+.duelo-lado .vida .cifras { font-size: 18px; }
+.duelo-lado .minis { font-size: 11px; color: var(--tenue); }
+
+.duelo-centro { display: flex; flex-direction: column; align-items: center; gap: 9px; }
+.duelo-titulo { display: flex; align-items: center; gap: 10px; }
+.duelo-titulo .arma {
+  font-size: 13px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase;
+  padding: 4px 14px; border-radius: 999px; background: #3f1d1d; border: 1px solid var(--rojo);
+}
+.duelo-titulo .arma.cac { background: #3a2a0c; border-color: var(--oro); }
+.duelo-titulo .parte { font-size: 12px; color: var(--tenue); }
+.duelo-titulo .ronda { font-size: 10px; color: #64748b; }
+.duelo-notas { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; max-width: 520px; }
+.duelo-notas span { font-size: 10px; color: var(--tenue); border: 1px solid var(--linea); border-radius: 4px; padding: 1px 6px; }
+
+.duelo-fila { display: flex; flex-direction: column; align-items: center; gap: 4px; opacity: 0; transform: translateY(6px); transition: opacity .25s, transform .25s; }
+.duelo-fila.visible { opacity: 1; transform: none; }
+.duelo-fila .rotulo { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--tenue); }
+.duelo-fila .rotulo i { font-style: normal; color: #64748b; margin-left: 6px; }
+.dados-grupo { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; max-width: 560px; }
+.dado-duelo { display: inline-block; animation: cae .3s cubic-bezier(.2, 1.6, .5, 1) both; }
+.dado-duelo.rodando { animation: tiembla .14s infinite alternate; }
+.dado-duelo.falla { opacity: .45; }
+.dado-duelo.critico .dado { filter: drop-shadow(0 0 7px var(--oro)); }
+.dado-duelo.impacta .dado { filter: drop-shadow(0 0 4px rgba(34, 197, 94, .55)); }
+.dado-duelo.herida .dado { filter: drop-shadow(0 0 5px rgba(239, 68, 68, .7)); }
+.dado-duelo.salvada { opacity: .7; }
+@keyframes cae { from { transform: translateY(-14px) rotate(-30deg) scale(.7); opacity: 0; } }
+@keyframes tiembla { from { transform: rotate(-8deg) translateY(-2px); } to { transform: rotate(8deg) translateY(1px); } }
+
+.duelo-resumen { font-size: 12px; color: var(--tenue); opacity: 0; transition: opacity .25s; }
+.duelo-resumen.visible { opacity: 1; }
+.duelo-resumen b { color: #86efac; font-size: 15px; }
+.duelo-resumen b.oro { color: var(--oro); }
+.duelo-nota-critico { font-size: 11px; color: #fde68a; }
+
+.duelo-danio { display: flex; flex-direction: column; align-items: center; gap: 2px; opacity: 0; }
+.duelo-danio.visible { opacity: 1; animation: pega .45s cubic-bezier(.2, 1.6, .4, 1) both; }
+@keyframes pega { from { transform: scale(2.2); opacity: 0; } }
+.duelo-danio .cifra { font-size: 46px; font-weight: 900; color: #fca5a5; text-shadow: 0 0 24px rgba(239, 68, 68, .6); line-height: 1; }
+.duelo-danio .cifra.nada { font-size: 20px; color: var(--tenue); text-shadow: none; }
+.duelo-danio .desglose { display: flex; gap: 8px; font-size: 11px; color: var(--tenue); }
+.duelo-danio .desglose i { font-style: normal; }
+.duelo-danio .oro { color: var(--oro); }
+.duelo-danio .verde { color: #86efac; }
+.duelo-danio .azul { color: #93c5fd; }
+.duelo-danio .rojo { color: #fca5a5; }
+.duelo-destruida {
+  font-size: 22px; font-weight: 900; letter-spacing: .2em; text-transform: uppercase; color: var(--rojo);
+  animation: pega .5s cubic-bezier(.2, 1.6, .4, 1) both;
+}
+.duelo-pista { text-align: center; font-size: 10px; color: #475569; letter-spacing: .14em; text-transform: uppercase; margin-top: 10px; }
+
+/* ----------------------------------------------------------- Tirada rápida */
+
+.tirada-rapida { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; pointer-events: auto; }
+.tirada-rapida .caja {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: rgba(15, 20, 27, .96); border: 1px solid var(--linea); border-radius: 16px;
+  padding: 16px 28px; box-shadow: 0 24px 60px -20px #000;
+  animation: brota .22s cubic-bezier(.2, 1.4, .5, 1) both;
+}
+.tirada-rapida .titulo { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--tenue); }
+.tirada-rapida .necesita { font-size: 11px; color: #64748b; }
+.tirada-rapida .resultado { font-size: 18px; min-height: 24px; }
+.tirada-rapida .exito { border-color: var(--verde); }
+.tirada-rapida .exito .resultado { color: #86efac; }
+.tirada-rapida .fallo { border-color: var(--rojo); }
+.tirada-rapida .fallo .resultado { color: #fca5a5; }
+.dado-rodando.rueda { display: inline-block; animation: tiembla .12s infinite alternate; }
+.dado-rodando.para { display: inline-block; animation: cae .3s cubic-bezier(.2, 1.6, .5, 1) both; }
+
+/* --------------------------------------------------------------------- Hoja */
+
 .hoja-fondo {
-  position: absolute; inset: 0; z-index: 45;
-  display: grid; place-items: center;
-  background: rgba(8, 11, 16, .72); backdrop-filter: blur(2px);
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  background: rgba(4, 6, 9, .6); animation: aparece .2s ease-out both;
 }
 .hoja {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 14px; padding: 16px 18px;
-  width: min(420px, calc(100vw - 24px)); max-height: 82dvh; overflow-y: auto;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+  width: min(420px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--linea);
+  border-radius: 16px; padding: 18px 20px; box-shadow: 0 30px 80px -30px #000;
+  animation: brota .24s cubic-bezier(.2, 1.4, .5, 1) both;
 }
-.hoja header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
-.hoja h2 { margin: 0; font-size: 19px; text-transform: none; letter-spacing: 0; color: var(--text); }
-.hoja .sub { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
-.hoja .cerrar {
-  width: auto; margin: 0 0 0 auto; padding: 2px 9px;
-  font-size: 19px; line-height: 1; background: none; border: 0; color: var(--muted);
-}
+.hoja header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.hoja h2 { margin: 0; font-size: 18px; }
+.hoja .sub { margin: 2px 0 0; color: var(--tenue); font-size: 12px; }
+.hoja .cerrar { background: none; border: none; font-size: 22px; color: var(--tenue); line-height: 1; }
 .hoja-cuerpo { display: flex; flex-direction: column; gap: 12px; }
-.hoja .bando { display: flex; flex-direction: column; gap: 6px; }
-
-/* En móvil las hojas suben desde abajo y ocupan el ancho. */
-@media (max-width: 720px) {
-  .hoja-fondo { place-items: end stretch; }
-  .hoja {
-    width: auto; border-radius: 14px 14px 0 0; max-height: 78dvh;
-    padding-bottom: calc(16px + env(safe-area-inset-bottom));
-  }
+.hoja .grande, .partida-botones button {
+  width: 100%; padding: 10px; border-radius: 10px; font-weight: 700;
+  background: #1d4ed8; border: 1px solid #2563eb;
 }
-
-
-/* ---------------------------------------------------------------- Ficha --- */
-/*
-  Altura fija: la ficha ocupa siempre el mismo espacio, con unidad seleccionada
-  o sin ella. Antes crecía y encogía y el tablero saltaba a cada clic.
-*/
-/*
-  Una sola fila de identidad y perfil arriba, y las dos armas debajo en
-  horizontal. Aprovecha todo el ancho disponible y se lee de arriba abajo.
-*/
-/* Sin scroll: las dos armas caben una al lado de la otra. */
-/* En la banda de abajo las dos armas van una al lado de la otra. */
-
-
-/* El perfil continúa la misma fila que la cabecera. */
-/* En la columna todo tiene que poder encoger y envolver: no hay sitio de sobra. */
-
-
-
-/* ------------------------------------------------------- Barra superior --- */
-.barra {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 0 0 8px; border: 0; border-bottom: 1px solid var(--line);
-  border-radius: 0; background: none;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; padding: 8px 12px; font-size: 13px;
-}
-.barra .turno { font-weight: 700; }
-.barra .fase { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
-.barra .activo { font-weight: 700; }
-.barra .hueco { flex: 1; }
-.barra .semilla { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 11px; }
-.barra .semilla input { width: 82px; margin: 0; }
-.barra button { width: auto; margin: 0; }
-
-/* ---------------------------------------------------- Pantallas de fase --- */
-.pantalla {
-  position: absolute; inset: 0; z-index: 20;
-  display: grid; place-items: center;
-  background: rgba(8, 11, 16, .82);
-  backdrop-filter: blur(2px);
-  border-radius: 10px;
-}
-.pantalla-caja {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 14px; padding: 26px 34px; text-align: center;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
-  min-width: 320px;
-}
-.pantalla-caja h2 { font-size: 26px; margin: 0 0 4px; text-transform: none; letter-spacing: 0; color: var(--text); }
-.pantalla-caja .sub { color: var(--muted); margin: 0 0 18px; }
-.pantalla-acciones { margin-top: 18px; }
-button.grande {
-  width: auto; margin: 0 auto; padding: 11px 26px; font-size: 15px; font-weight: 700;
-  background: #1d4ed8; border-color: #1d4ed8; text-align: center;
-}
-button.grande:hover { background: #2563eb; }
-
-.dados { display: flex; gap: 34px; justify-content: center; }
-.tirada { display: flex; flex-direction: column; align-items: center; gap: 7px; opacity: .55; }
-.tirada.gana { opacity: 1; }
-.tirada .jugador { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.tirada .etiqueta { font-size: 11px; font-weight: 700; color: #4ade80; }
-.tirada.pA .jugador { color: var(--a); }
-.tirada.pB .jugador { color: var(--b); }
-
-/* ------------------------------------------------ Menú flotante de unidad --- */
-.menu-unidad.fijo {
-  position: static; width: auto; box-shadow: none;
-  background: var(--panel);
-}
-/*
-  Junto a la miniatura. El ancla es el centro de la unidad; el menú se separa
-  un poco y se abre hacia el lado con sitio, como un menú contextual, para no
-  taparla ni salirse del tablero.
-*/
-.menu-unidad.junto-a {
-  position: absolute; z-index: 18; width: 212px;
-  transform: translateY(-12px);
-  animation: menu-aparece .13s ease-out;
-}
-.menu-unidad.junto-a.der { margin-left: 26px; }
-.menu-unidad.junto-a.izq { transform: translate(-100%, -12px); margin-left: -26px; }
-@keyframes menu-aparece {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-/* Una lista corta y clicable: solo salen las acciones que sí se pueden hacer. */
-.menu-unidad.junto-a .accion-item { min-height: 32px; }
-.menu-unidad {
-  position: absolute; z-index: 15; width: 230px;
-  background: rgba(18, 23, 30, .97);
-  border: 1px solid var(--line); border-left: 4px solid var(--line);
-  border-radius: 10px; padding: 9px 10px;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
-  font-size: 12px;
-}
-.menu-unidad.bando-A { border-left-color: var(--a); }
-.menu-unidad.bando-B { border-left-color: var(--b); }
-.menu-unidad header { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
-.menu-unidad .cerrar {
-  width: auto; margin: 0 0 0 auto; padding: 0 6px; font-size: 16px; line-height: 1;
-  background: none; border: none; color: var(--muted);
-}
-.menu-unidad h4 {
-  margin: 9px 0 4px; font-size: 10px; text-transform: uppercase;
-  letter-spacing: .06em; color: var(--muted);
-}
-.menu-unidad h4 small { text-transform: none; letter-spacing: 0; opacity: .7; }
-.menu-unidad .nota { color: var(--muted); margin: 0 0 7px; font-size: 11px; }
-.menu-unidad .acciones-restantes { margin: 0 0 6px; font-weight: 700; color: #4ade80; }
-.menu-unidad .acciones-restantes .trabada { color: #fbbf24; }
-.menu-unidad button.accion { display: block; width: 100%; margin-bottom: 4px; padding: 5px 8px; text-align: left; }
-.menu-unidad button.principal { background: #1d4ed8; border-color: #1d4ed8; text-align: center; font-weight: 700; }
-.menu-unidad button.terminar { margin-top: 8px; text-align: center; }
-.menu-unidad .arma { display: block; font-weight: 600; }
-.menu-unidad .perfil { display: block; font-size: 10px; color: var(--muted); }
-.menu-unidad .habs { display: block; font-size: 10px; color: #fbbf24; }
-
-/* ------------------------------------------------------------- Avisos --- */
-.aviso {
-  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
-  z-index: 18; max-width: 76%; padding: 9px 14px; font-size: 12.5px; cursor: pointer;
-  background: #4a1d1d; border: 1px solid #b91c1c; border-radius: 8px; color: #fecaca;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .5);
-}
-
-.menu-unidad button.deshacer {
-  background: #2b2416; border-color: #a16207; color: #fbbf24; text-align: center;
-}
-.menu-unidad button.deshacer:hover { background: #3a3018; }
-.menu-unidad button.deshacer .perfil { color: #a16207; }
-
-.menu-unidad .par { display: flex; gap: 6px; margin-bottom: 4px; }
-.menu-unidad .par button { flex: 1; margin: 0; text-align: center; padding: 6px 4px; font-weight: 600; }
-.menu-unidad button.confirmar { background: #14532d; border-color: #16a34a; color: #86efac; }
-.menu-unidad button.confirmar:hover { background: #166534; }
-
-/* ------------------------------------------------ Desplegable de acciones --- */
-.menu-unidad .lista-acciones { list-style: none; margin: 0 0 8px; padding: 0; }
-.menu-unidad .lista-acciones li { margin-bottom: 3px; }
-.menu-unidad button.accion-item {
-  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
-  width: 100%; margin: 0; padding: 5px 8px; text-align: left;
-  background: #232c37; border: 1px solid var(--line); border-radius: 6px;
-}
-.menu-unidad button.accion-item:hover:not(:disabled) { background: #2e3947; border-color: #3f4a5a; }
-.menu-unidad button.accion-item .nombre { font-weight: 600; }
-.menu-unidad button.accion-item .coste {
-  font-size: 10px; color: var(--muted); background: #0f151d;
-  border-radius: 3px; padding: 0 5px; align-self: center;
-}
-.menu-unidad button.accion-item .motivo {
-  grid-column: 1 / -1; font-size: 10px; color: #6b7280; font-style: italic;
-}
-/* Apagada: negra y sin color, para que se lea de un vistazo que no se puede. */
-.menu-unidad button.accion-item.apagada {
-  background: #0b0e13; border-color: #1a1f27; color: #4b5563; opacity: 1;
-}
-.menu-unidad button.accion-item.elegida {
-  background: #14532d; border-color: #22c55e; color: #bbf7d0;
-}
-.menu-unidad button.accion-item.elegida .coste { background: #052e16; color: #86efac; }
-
-.menu-unidad .en-curso {
-  margin: 0 0 8px; padding: 8px 10px; border-radius: 6px;
-  background: #14532d; border: 1px solid #22c55e;
-}
-.menu-unidad .en-curso b { display: block; color: #bbf7d0; font-size: 13px; }
-.menu-unidad .en-curso span { display: block; color: #86efac; font-size: 11px; margin-top: 2px; }
-
-/* Anclado a la esquina mientras se coloca la unidad, para no tapar el tablero. */
-.menu-unidad.anclado {
-  left: 12px; top: 12px; width: 210px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .6);
-}
-
-/* En la columna la fase es un bloque más, no una capa sobre la mesa. */
-.pantalla.lateral {
-  position: static; inset: auto;
-  display: block; background: none; backdrop-filter: none;
-}
-.pantalla.lateral .pantalla-caja {
-  min-width: 0; width: 100%; padding: 14px 16px; text-align: left;
-  box-shadow: none;
-}
-.pantalla.lateral .pantalla-caja h2 { font-size: 18px; }
-.pantalla.lateral .pantalla-caja .sub { margin-bottom: 12px; font-size: 12px; }
-.pantalla.lateral .dados { gap: 18px; justify-content: flex-start; }
-.pantalla.lateral button.grande { width: 100%; padding: 9px 14px; font-size: 14px; }
-.aviso-fase {
-  font-size: 11.5px; color: var(--muted); background: #10151d;
-  border-left: 3px solid #334155; border-radius: 0 5px 5px 0;
-  padding: 7px 9px; margin: 0 0 12px;
-}
-
-/* ------------------------------------------------------ Pop-up de combate --- */
-.combate {
-  position: absolute; inset: 0; z-index: 40;
-  display: grid; place-items: center;
-  background: rgba(6, 9, 13, .86); backdrop-filter: blur(3px);
-  border-radius: 10px;
-}
-.combate-caja {
-  width: min(560px, 92%);
-  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-  padding: 18px 20px; box-shadow: 0 24px 64px rgba(0, 0, 0, .65);
-}
-
-.duelo { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px; margin-bottom: 16px; }
-.duelo .lado { display: flex; flex-direction: column; gap: 1px; padding-left: 10px; border-left: 4px solid var(--line); }
-.duelo .lado.derecha { text-align: right; padding: 0 10px 0 0; border-left: 0; border-right: 4px solid var(--line); }
-.duelo .lado.bando-A { border-color: var(--a); }
-.duelo .lado.bando-B { border-color: var(--b); }
-.duelo .rol { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
-.duelo .lado b { font-size: 17px; }
-.duelo .lado .nombre { font-size: 12px; }
-.duelo .lado .arma { font-size: 11px; color: #fbbf24; }
-.duelo .versus { font-size: 15px; font-weight: 800; color: #475569; letter-spacing: .08em; }
-
-.combate .tirada { border-top: 1px solid var(--line); padding-top: 10px; margin-bottom: 10px; }
-.combate .tirada h4 {
-  margin: 0 0 8px; font-size: 10.5px; text-transform: uppercase;
-  letter-spacing: .06em; color: var(--muted);
-}
-.combate .tirada.activa h4 { color: #fbbf24; }
-.dados-fila { display: flex; flex-wrap: wrap; gap: 7px; min-height: 46px; align-items: center; }
-.sin-dados { color: var(--muted); font-size: 12px; margin: 0; }
-
-/* Cada dado entra con un golpe seco, como si cayera en la mesa. */
-@keyframes cae { from { transform: scale(1.5) rotate(-14deg); opacity: 0; } to { transform: none; opacity: 1; } }
-.dado-res { display: inline-flex; border-radius: 10px; padding: 2px; animation: cae .18s ease-out; }
-.dado-res.critico { background: #78350f; box-shadow: 0 0 0 2px #f59e0b; }
-.dado-res.impacto { background: #14532d; box-shadow: 0 0 0 2px #22c55e; }
-.dado-res.fallo { opacity: .38; }
-.dado-res.bloqueado { background: #1e3a5f; box-shadow: 0 0 0 2px #3b82f6; }
-.dado-res.pasa { background: #4a1d1d; box-shadow: 0 0 0 2px #ef4444; }
-.combate .resumen { margin: 7px 0 0; font-size: 12px; color: #cbd5e1; }
-
-.desenlace {
-  display: flex; align-items: center; gap: 18px;
-  border-top: 1px solid var(--line); padding-top: 12px; margin-bottom: 10px;
-}
-.desenlace .danio { text-align: center; }
-.desenlace .cifra { display: block; font-size: 34px; font-weight: 800; line-height: 1; color: #f87171; }
-.desenlace .etiqueta { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.desenlace .vidas { flex: 1; font-size: 12px; }
-.desenlace .vidas .barra { margin-top: 5px; height: 7px; background: #0b1220; border-radius: 4px; overflow: hidden; }
-.desenlace .vidas .barra div { height: 100%; transition: width .4s ease-out; }
-.desenlace .destruida { display: block; margin-top: 5px; color: #f87171; font-weight: 700; }
-
-.combate .notas {
-  list-style: none; margin: 0 0 12px; padding: 8px 10px; font-size: 11px;
-  background: #2a2413; border-left: 3px solid #a16207; border-radius: 0 5px 5px 0; color: #fbbf24;
-}
-.combate .notas li { margin-bottom: 2px; }
-.combate footer { text-align: center; }
-.combate button.saltar {
-  width: auto; margin: 0 auto; padding: 5px 14px; font-size: 11px; color: var(--muted); text-align: center;
-}
-
-/* En la fase de carga se deja ver el tablero: la unidad se está aproximando. */
-.combate.fase-carga { background: rgba(6, 9, 13, .42); backdrop-filter: none; }
-.combate.fase-carga .combate-caja { opacity: .96; }
-
-
-/* ---------------------------------------------------------- Armas de ficha --- */
-
-
-/* Desglose de salvación en la cabecera del defensor. */
-.duelo .salvacion { display: flex; align-items: center; gap: 5px; justify-content: flex-end; font-size: 11px; }
-.duelo .salvacion .base { color: #cbd5e1; font-weight: 700; }
-.duelo .salvacion .mod {
-  font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em;
-  padding: 1px 5px; border-radius: 3px;
-}
-.duelo .salvacion .mod.cobertura { background: #2a2413; color: #fbbf24; border: 1px solid #a16207; }
-.duelo .salvacion .flecha { color: var(--muted); }
-.duelo .salvacion .final { color: #4ade80; font-weight: 800; font-size: 13px; }
-
-/* --- Refuerzos desde la Reserva, en la Fase de Iniciativa --- */
-.refuerzos { margin-top: 14px; border-top: 1px solid #2a323d; padding-top: 12px; }
-.refuerzos h4 {
-  margin: 0 0 8px; font-size: 11px; letter-spacing: .12em;
-  text-transform: uppercase; color: #94a3b8; font-weight: 700;
-}
-.refuerzos .bando { margin-bottom: 10px; }
-.refuerzos .jugador { font-size: 11px; font-weight: 700; color: #cbd5e1; }
-.refuerzos .pA .jugador { color: #60a5fa; }
-.refuerzos .pB .jugador { color: #f87171; }
-.refuerzos .sin-puesto { margin-left: 6px; font-size: 10px; color: #64748b; }
-.refuerzos .fichas { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.refuerzos .refuerzo {
-  background: #1b212a; border: 1px solid #323b47; color: #e2e8f0;
-  border-radius: 6px; padding: 5px 9px; font-size: 11px; cursor: pointer;
-}
-.refuerzos .refuerzo:hover:not(:disabled) { border-color: #64748b; }
-.refuerzos .refuerzo.elegida { border-color: #22c55e; background: #14321f; }
-.refuerzos .refuerzo:disabled { opacity: .4; cursor: default; }
-
-/* --- Quién lleva cada bando --- */
-.ia-mandos h4 {
-  margin: 0 0 8px; font-size: 10px; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--muted);
-}
-.ia-bando {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 6px; font-size: 12px; color: var(--text);
-}
-.ia-bando input { width: auto; margin: 0; }
-.ia-bando.pA span { color: var(--a); }
-.ia-bando.pB span { color: var(--b); }
-.marcador .equipo .maquina {
-  font-size: 9px; font-weight: 800; letter-spacing: .08em;
-  color: var(--muted); border: 1px solid var(--line);
-  border-radius: 4px; padding: 2px 5px;
-}
-
-/* Habilidades de arma: el nombre en la ficha, la regla al pasar el ratón. */
-
-/* El Héroe en reserva se distingue: es la ficha que tiene que salir primero. */
-.rail .refuerzo.es-heroe { border-color: #fbbf24; color: #fde68a; }
-.rail .refuerzo.es-heroe::before { content: '★ '; color: #fbbf24; }
-
 .partida-botones { display: flex; flex-direction: column; gap: 8px; }
-.partida-botones button:not(.grande) { width: 100%; margin: 0; font-size: 12px; }
+.partida-botones button:not(.grande) { background: #1f2937; border-color: #334155; font-weight: 500; }
+.ia-mandos { display: flex; flex-direction: column; gap: 8px; }
+.ia-bando { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.fin-motivo { margin: 0; color: var(--tenue); }
+.fin-puntos { margin: 0; font-size: 20px; font-weight: 800; }
 
-/* --- Dado de la iniciativa: rueda, frena y se clava --- */
-.dado-rodando { display: inline-flex; }
-.dado-rodando.rueda { animation: dado-rueda .16s ease-in-out infinite alternate; }
-.dado-rodando.para { animation: dado-para .32s cubic-bezier(.3, 1.6, .5, 1); }
-@keyframes dado-rueda {
-  from { transform: translateY(-3px) rotate(-11deg); }
-  to   { transform: translateY(2px) rotate(9deg); }
-}
-@keyframes dado-para {
-  0%   { transform: scale(1.28) rotate(6deg); }
-  60%  { transform: scale(.94) rotate(-2deg); }
-  100% { transform: scale(1) rotate(0); }
-}
-/* El ganador no se anuncia hasta que han parado los dos dados. */
-.tirada .etiqueta { transition: opacity .25s; }
-.tirada.pendiente .etiqueta { opacity: 0; }
-.tirada.gana.revelada { animation: gana-brilla .6s ease-out; }
-@keyframes gana-brilla {
-  0% { filter: drop-shadow(0 0 0 transparent); }
-  40% { filter: drop-shadow(0 0 14px #22c55e); }
-  100% { filter: drop-shadow(0 0 0 transparent); }
-}
-
-/* --- Rueda de acciones alrededor de la miniatura --- */
-.rueda-acciones { pointer-events: none; }
-.rueda-item {
-  pointer-events: auto; cursor: pointer;
-  animation: rueda-abre .22s cubic-bezier(.2, 1.5, .4, 1) backwards;
-}
-@keyframes rueda-abre {
-  from { opacity: 0; transform: translate(0, 0) scale(.3); }
-}
-.rueda-item .fondo {
-  fill: rgba(14, 19, 26, .95); stroke: #64748b; stroke-width: 1.5;
-  transition: fill .12s, stroke .12s;
-}
-.rueda-item .icono { fill: #e2e8f0; stroke: #e2e8f0; }
-.rueda-item .coste {
-  fill: #fbbf24; font-size: 9px; font-weight: 800; stroke: none;
-}
-.rueda-item:hover .fondo, .rueda-item.resaltada .fondo { fill: #1d4ed8; stroke: #93c5fd; }
-.rueda-item.apagada { cursor: not-allowed; }
-.rueda-item.apagada .fondo { fill: rgba(14, 19, 26, .7); stroke: #334155; }
-.rueda-item.apagada .icono { fill: #475569; stroke: #475569; }
-.rueda-item.apagada:hover .fondo { fill: rgba(14, 19, 26, .7); stroke: #475569; }
-
-.rueda-nombre { pointer-events: none; }
-.rueda-nombre .titulo {
-  fill: #e2e8f0; font-size: 12px; font-weight: 700;
-  stroke: #0b0e13; stroke-width: 3.5; paint-order: stroke;
-}
-.rueda-nombre .motivo {
-  fill: #94a3b8; font-size: 10px;
-  stroke: #0b0e13; stroke-width: 3; paint-order: stroke;
-}
-.rueda-hilo { stroke: #64748b; stroke-width: 1.2; stroke-dasharray: 3 4; opacity: .7; }
-
-/* Aceptar y deshacer, cuando la rueda pregunta por un movimiento sin confirmar. */
-.rueda-item.aceptar .fondo { fill: #14532d; stroke: #22c55e; }
-.rueda-item.aceptar .icono { fill: none; stroke: #bbf7d0; }
-.rueda-item.aceptar:hover .fondo { fill: #166534; }
-.rueda-item.deshacer .fondo { fill: #3f1d1d; stroke: #f87171; }
-.rueda-item.deshacer .icono { fill: none; stroke: #fecaca; }
-.rueda-item.deshacer:hover .fondo { fill: #5b2424; }
-
-/*
-  La ficha en la banda de abajo: una sola fila y chapas pequeñas. Lo que se
-  mira mil veces durante la partida —vidas, acciones, alcance— tiene que caber
-  sin robarle alto a la mesa, así que el valor va grande y el rótulo diminuto.
-*/
-
-/* --- Ficha de la banda: dos líneas, sin cuadritos y sin robarle alto a la mesa --- */
-.ficha {
-  flex: 1 1 auto; min-width: 0;
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px;
-  align-content: center;
-  background: var(--panel);
-  border: 1px solid var(--line); border-left: 4px solid var(--line);
-  border-radius: 10px; padding: 8px 14px;
-}
-.ficha.bando-A { border-left-color: var(--a); }
-.ficha.bando-B { border-left-color: var(--b); }
-.ficha.vacia { background: rgba(26, 32, 41, .45); border-color: #232a34; border-left-color: #232a34; }
-
-.ficha .quien { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; }
-.ficha .quien .id {
-  font-weight: 800; font-size: 13px; background: #0f151d;
-  border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px;
-}
-.ficha .quien .nombre { font-weight: 700; font-size: 17px; }
-.ficha .quien .clase, .ficha .quien .rol {
-  font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
-}
-.ficha .quien .rol { color: #fbbf24; text-transform: none; font-style: italic; letter-spacing: 0; }
-.ficha .estado {
-  font-size: 9px; border-radius: 3px; padding: 1px 6px; text-transform: uppercase; letter-spacing: .06em;
-}
-.ficha .estado.muerta { background: #3f1d1d; color: #fca5a5; }
-.ficha .estado.dormida { background: #2a2f38; color: #94a3b8; }
-.ficha .estado.trabada { background: #3a2f10; color: #fcd34d; }
-
-.ficha .estado-vivo { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.ficha .estado-vivo .barra {
-  width: 104px; height: 8px; border-radius: 3px; background: #0b1220; overflow: hidden;
-}
-.ficha .estado-vivo .barra > div { height: 100%; }
-.ficha .estado-vivo .vidas { font-size: 16px; font-weight: 700; }
-.ficha .estado-vivo .vidas i,
-.ficha .estado-vivo .acciones i { font-style: normal; font-weight: 400; color: var(--muted); font-size: 9px; }
-.ficha .estado-vivo .acciones { font-size: 16px; font-weight: 700; color: #4ade80; }
-
-.ficha .valores { display: flex; gap: 12px; white-space: nowrap; }
-.ficha .valor { display: flex; align-items: baseline; gap: 3px; }
-.ficha .valor b { font-size: 16px; }
-.ficha .valor i {
-  font-style: normal; font-size: 10px; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .05em;
-}
-
-.ficha .armas { display: flex; flex-direction: column; gap: 2px; }
-.ficha .arma { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
-.ficha .arma .tipo { font-size: 15px; color: var(--muted); width: 16px; cursor: help; }
-.ficha .arma b { font-size: 15px; }
-.ficha .arma .r {
-  font-size: 10px; color: var(--muted); text-transform: uppercase;
-  letter-spacing: .05em; margin-right: 5px;
-}
-.ficha .arma .hab {
-  font-size: 9px; color: #fbbf24; border: 1px solid #533b10; border-radius: 4px;
-  padding: 0 5px; cursor: help;
-}
+.dados { display: flex; justify-content: center; gap: 40px; padding: 8px 0 4px; }
+.tirada { display: flex; flex-direction: column; align-items: center; gap: 6px; transition: transform .3s, opacity .3s; }
+.tirada .jugador { font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.tirada.pA .jugador { color: var(--azul); }
+.tirada.pB .jugador { color: var(--rojo); }
+.tirada .etiqueta { font-size: 11px; color: #86efac; min-height: 16px; }
+.tirada.revelada:not(.gana) { opacity: .5; }
+.tirada.gana { transform: scale(1.12); }

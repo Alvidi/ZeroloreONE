@@ -1,124 +1,92 @@
+import { add, baseDistance, centerDistance, normalize, scale, sub, vec, type Vec2 } from './geometry.ts';
 import { Rng } from './rng.ts';
-import {
-  baseDistance,
-  baseSolapaRect,
-  centerDistance,
-  normalize,
-  add,
-  recortarPorObstaculos,
-  scale,
-  type Vec2,
-} from './geometry.ts';
-import { caminoMasCorto } from './rules/camino.ts';
-import { hasCover, lineOfSight } from './rules/los.ts';
-import {
-  controlTrasTurno,
-  dentroDelPuesto,
-  libreDeUnidades,
-  puedeDesplegarEn,
-} from './rules/puestos.ts';
-import {
-  anguloMuertoBloquea,
-  hasAbility,
-  resolveMeleeAttack,
-  resolveRangedAttack,
-  type AttackContext,
-} from './rules/combat.ts';
 import type { CommandResult, GameEvent } from './events.ts';
+import { parametrosAtaque, resolverAtaque, tiene, type Situacion } from './rules/combat.ts';
+import { repartirDanio } from './rules/danio.ts';
+import { prever, type Prevision } from './rules/prevision.ts';
+import {
+  esCoherente,
+  formar,
+  motivoSitio,
+  recorrido,
+  restriccionesPara,
+  type Pieza,
+  type Restricciones,
+} from './rules/formacion.ts';
+import { disparaDesdeCobertura, masCercana, unidadEnCobertura, veA } from './rules/los.ts';
+import { controlTrasTurno, puedeDesplegarEn, tocaPuesto } from './rules/puestos.ts';
 import {
   ACTION_COST,
-  IGNORA_TRABADO,
+  DISTANCIA_ENEMIGO,
   PUNTOS_POR_PUESTO,
-  ZONA_CONTROL,
-  bloqueaPaso,
+  anclaDe,
+  comandanteDe,
+  disparableTrabado,
+  movimientoDe,
+  tipoDe,
+  tropaDe,
   type ActionKind,
+  type Arma,
   type GameState,
-  type MeleeWeapon,
+  type Mini,
   type PlayerId,
-  type Puesto,
-  type RangedWeapon,
-  type Unit,
-  type UnitProfile,
+  type TipoUnidad,
+  type Unidad,
 } from './types.ts';
-
-/** Distancia mínima a un enemigo fuera de la carga, en pulgadas. */
-/** Ataque suelto: se puede pegar a un enemigo a esta distancia sin trabarse. */
-const ALCANCE_CAC = 1;
-/** Con la habilidad Alcance, el ataque suelto llega hasta aquí. */
-const ALCANCE_SUELTO = 3;
-/** Carga: 3+ en 1D6. */
-/** Radio de la onda de Explosiva, en pulgadas desde la miniatura impactada. */
-const DISTANCIA_EXPLOSIVA = 3;
-const UMBRAL_CARGA = 3;
-/** Destrabarse: 4+ en 1D6. */
-const UMBRAL_DESTRABE = 4;
 
 export type Command =
   | { type: 'TirarIniciativa' }
+  | { type: 'Desplegar'; reservaId: string; puestoId: string; posiciones: readonly Vec2[] }
+  | { type: 'Reforzar'; unidadId: string; reservaId: string; posicion: Vec2 }
   | { type: 'PasarDespliegue'; jugador: PlayerId }
-  | { type: 'ActivarUnidad'; unitId: string }
-  | { type: 'Mover'; unitId: string; destino: Vec2 }
-  | { type: 'Desplegar'; unitId: string; puestoId: string; posicion: Vec2 }
-  | { type: 'Correr'; unitId: string; destino: Vec2 }
-  | { type: 'Disparar'; unitId: string; targetId: string; armaNombre: string }
-  | { type: 'Cargar'; unitId: string; targetId: string }
-  | { type: 'AtacarCaC'; unitId: string; targetId: string; armaNombre: string }
-  | { type: 'Destrabarse'; unitId: string }
-  | { type: 'TerminarActivacion'; unitId: string }
+  | { type: 'ActivarUnidad'; unidadId: string }
+  | { type: 'Mover'; unidadId: string; posiciones: Readonly<Record<string, Vec2>> }
+  | { type: 'Correr'; unidadId: string; posiciones: Readonly<Record<string, Vec2>> }
+  | { type: 'Disparar'; unidadId: string; objetivoId: string }
+  | { type: 'Cargar'; unidadId: string; objetivoId: string }
+  | { type: 'AtacarCaC'; unidadId: string; objetivoId: string }
+  | { type: 'Destrabarse'; unidadId: string }
+  | { type: 'TerminarActivacion'; unidadId: string }
   | { type: 'TerminarTurno' };
 
 const fail = (reason: string): CommandResult => ({ ok: false, reason });
+const ok = (events: GameEvent[]): CommandResult => ({ ok: true, events });
+
+/** Carga: 3+ en 1D6. */
+const CARGA_EXITO = 3;
+/** Destrabarse: 3+ en 1D6. */
+const DESTRABE_EXITO = 3;
+/** Explosiva alcanza a las miniaturas enemigas a esta distancia de la impactada. */
+const RADIO_EXPLOSIVA = 3;
+
+/** Un grupo que ataca junto con la misma arma: la tropa, el Comandante, o la miniatura suelta. */
+interface Grupo {
+  readonly parte: 'tropa' | 'comandante' | 'unidad';
+  readonly minis: readonly Mini[];
+  readonly tipo: TipoUnidad;
+  readonly arma: Arma;
+}
 
 /**
- * Motor de reglas. No conoce el DOM ni el render: recibe comandos, los valida
- * contra el reglamento y devuelve un estado nuevo más la lista de eventos.
- * Es lo que se reutiliza tal cual en web, móvil y escritorio.
+ * El motor de reglas. Recibe órdenes, comprueba que son legales y devuelve lo
+ * que ha pasado. No sabe nada de pantallas: la interfaz web, la IA y los tests
+ * hablan con él igual.
+ *
+ * Si una orden viola una regla, el estado no cambia en absoluto.
  */
 export class Engine {
   private state: GameState;
   private rng: Rng;
   private readonly log: GameEvent[];
+  /** De quién era cada Cuartel General al empezar: tomar uno ajeno gana. */
+  private readonly cuarteles: ReadonlyMap<string, PlayerId>;
 
-  /**
-   * `log` permite reconstruir un motor a partir de un estado anterior sin
-   * perder el registro: es lo que hace posible deshacer una jugada.
-   * El estado del generador aleatorio viaja dentro de `GameState`, así que al
-   * restaurar también se restaura la secuencia de dados: repetir la misma
-   * acción da el mismo resultado, y no se pueden "rebuscar" tiradas mejores.
-   */
-  /**
-   * Las habilidades se encienden por separado: las de ARMA (Brutal, Perforante,
-   * Explosiva…) y las de UNIDAD (Guardia, Certero, Terror…). Así se puede
-   * jugar con unas mientras las otras se afinan. `habilidades` a secas fija
-   * las dos a la vez, que es lo que usaban las pruebas antiguas.
-   */
-  private readonly habilidadesArma: boolean;
-  private readonly habilidadesUnidad: boolean;
-  /*
-    De quién era cada Cuartel General al empezar. Hace falta para la victoria
-    inmediata de Guerra Total: "tomar el CG enemigo" es tomar uno que no fuera
-    tuyo de salida, y eso no se puede deducir del estado ya cambiado.
-  */
-  private readonly cuartelesIniciales: ReadonlyMap<string, PlayerId>;
-
-  constructor(
-    initial: GameState,
-    log: readonly GameEvent[] = [],
-    opciones: {
-      habilidades?: boolean;
-      habilidadesArma?: boolean;
-      habilidadesUnidad?: boolean;
-    } = {},
-  ) {
+  constructor(initial: GameState, log: readonly GameEvent[] = []) {
     this.state = initial;
     this.rng = Rng.restore(initial.rngState);
     this.log = [...log];
-    this.habilidadesArma = opciones.habilidadesArma ?? opciones.habilidades ?? true;
-    this.habilidadesUnidad = opciones.habilidadesUnidad ?? opciones.habilidades ?? true;
-    this.cuartelesIniciales = new Map(
-      initial.puestos
-        .filter((pm) => pm.esCuartelGeneral && pm.duenio !== null)
-        .map((pm) => [pm.id, pm.duenio!] as const),
+    this.cuarteles = new Map(
+      initial.puestos.filter((p) => p.esCuartelGeneral && p.duenio !== null).map((p) => [p.id, p.duenio!] as const),
     );
   }
 
@@ -130,1121 +98,945 @@ export class Engine {
     return this.log;
   }
 
-  private profileOf(unit: Unit): UnitProfile | undefined {
-    return this.state.profiles[unit.profileId];
-  }
-
-  private unit(id: string): Unit | undefined {
-    return this.state.units[id];
-  }
-
-  /** Aplica un comando. Si viola una regla, el estado no cambia. */
   execute(cmd: Command): CommandResult {
-    const result = this.dispatch(cmd);
-    if (result.ok) {
-      this.state = { ...this.state, rngState: this.rng.snapshot() };
-      this.log.push(...result.events);
+    const antes = this.state;
+    const rngAntes = this.rng.snapshot();
+    if (this.state.fase === 'Terminada') return fail('La partida ha terminado');
+    const r = this.dispatch(cmd);
+    if (!r.ok) {
+      this.state = antes;
+      this.rng = Rng.restore(rngAntes);
+      return r;
     }
-    return result;
+    this.state = { ...this.state, rngState: this.rng.snapshot() };
+    this.log.push(...r.events);
+    return r;
   }
 
   private dispatch(cmd: Command): CommandResult {
     switch (cmd.type) {
+      case 'TirarIniciativa':
+        return this.tirarIniciativa();
+      case 'Desplegar':
+        return this.desplegar(cmd.reservaId, cmd.puestoId, cmd.posiciones);
+      case 'Reforzar':
+        return this.reforzar(cmd.unidadId, cmd.reservaId, cmd.posicion);
       case 'PasarDespliegue':
         return this.pasarDespliegue(cmd.jugador);
-      case 'TirarIniciativa':
-        return this.rollInitiative();
       case 'ActivarUnidad':
-        return this.activate(cmd.unitId);
-      case 'Desplegar':
-        return this.deploy(cmd.unitId, cmd.puestoId, cmd.posicion);
+        return this.activar(cmd.unidadId);
       case 'Mover':
-        return this.move(cmd.unitId, cmd.destino, 'Mover');
+        return this.mover(cmd.unidadId, cmd.posiciones, 'Mover');
       case 'Correr':
-        return this.move(cmd.unitId, cmd.destino, 'Correr');
+        return this.mover(cmd.unidadId, cmd.posiciones, 'Correr');
       case 'Disparar':
-        return this.shoot(cmd.unitId, cmd.targetId, cmd.armaNombre);
+        return this.disparar(cmd.unidadId, cmd.objetivoId);
       case 'Cargar':
-        return this.charge(cmd.unitId, cmd.targetId);
+        return this.cargar(cmd.unidadId, cmd.objetivoId);
       case 'AtacarCaC':
-        return this.melee(cmd.unitId, cmd.targetId, cmd.armaNombre);
+        return this.cuerpoACuerpo(cmd.unidadId, cmd.objetivoId);
       case 'Destrabarse':
-        return this.disengage(cmd.unitId);
+        return this.destrabarse(cmd.unidadId);
       case 'TerminarActivacion':
-        return this.endActivation(cmd.unitId);
+        if (this.state.unidadActiva !== cmd.unidadId) return fail('Esa unidad no está activada');
+        return ok(this.cerrarActivacion(cmd.unidadId));
       case 'TerminarTurno':
-        return this.endTurn();
+        return this.terminarTurno();
     }
   }
 
-  // ---------------------------------------------------------------- Iniciativa
+  // ------------------------------------------------------------- Utilidades
 
-  /**
-   * Iniciativa: cada jugador tira 1D6 y el más alto abre. Se tira UNA vez en
-   * toda la partida, al empezar; a partir de ahí se alterna quién abre cada
-   * turno rotando el orden en el fin de turno.
-   */
-  private rollInitiative(): CommandResult {
-    if (this.state.ordenIniciativa.length > 0) return fail('La Iniciativa ya está tirada');
+  private unidad(id: string): Unidad | undefined {
+    return this.state.unidades[id];
+  }
+
+  private tipo(id: string): TipoUnidad {
+    return this.state.tipos[id]!;
+  }
+
+  private parchear(id: string, cambio: Partial<Unidad>): void {
+    const u = this.state.unidades[id];
+    if (!u) return;
+    this.state = { ...this.state, unidades: { ...this.state.unidades, [id]: { ...u, ...cambio } } };
+  }
+
+  private sumarPuntos(jugador: PlayerId, puntos: number, motivo: string): GameEvent {
+    const total = (this.state.puntos[jugador] ?? 0) + puntos;
+    this.state = { ...this.state, puntos: { ...this.state.puntos, [jugador]: total } };
+    return { type: 'PuntosGanados', jugador, puntos, motivo, total };
+  }
+
+  // ------------------------------------------------------------- Iniciativa
+
+  /** Al empezar cada turno cada jugador tira 1D6: el más alto abre. */
+  private tirarIniciativa(): CommandResult {
+    if (this.state.fase !== 'Iniciativa') return fail('No toca tirar Iniciativa');
 
     let tiradas: Record<PlayerId, number> = {};
     let orden: PlayerId[] = [];
-
-    // En caso de empate se repite la tirada.
-    for (let intento = 0; intento < 50; intento++) {
+    for (let intento = 0; intento < 50 && orden.length === 0; intento++) {
       tiradas = {};
-      for (const p of this.state.jugadores) tiradas[p] = this.rng.d6();
+      for (const j of this.state.jugadores) tiradas[j] = this.rng.d6();
       const valores = Object.values(tiradas);
+      // Empate: se repite.
       if (new Set(valores).size === valores.length) {
         orden = [...this.state.jugadores].sort((a, b) => (tiradas[b] ?? 0) - (tiradas[a] ?? 0));
-        break;
       }
     }
-    if (orden.length === 0) return fail('No se pudo deshacer el empate de Iniciativa');
+    if (orden.length === 0) return fail('No se pudo deshacer el empate');
 
-    // Al inicio del turno todas las unidades vuelven a estar sin activar.
-    const units: Record<string, Unit> = {};
-    for (const [id, u] of Object.entries(this.state.units)) {
-      units[id] = {
-        ...u,
-        activated: false,
-        accionesRestantes: 0,
-        accionesUsadas: [],
-        seMovio: false,
-        corrio: false,
-        cargo: false,
-        ataqueGratuitoContra: null,
-      };
-    }
-
-    /*
-      La tirada deja la partida en Despliegue: quien ganó coloca primero y a
-      partir de ahí se alternan. Cuando los dos pasan, arranca el turno 1 sin
-      botón de por medio.
-
-      Si no hay nada en reserva —ejércitos ya puestos en mesa—, no hay nada que
-      desplegar y se entra directo a las activaciones.
-    */
-    const hayQueDesplegar = this.state.reserva.length > 0;
     this.state = {
       ...this.state,
-      units,
-      fase: hayQueDesplegar ? 'Despliegue' : 'Activaciones',
+      fase: 'Despliegue',
       ordenIniciativa: orden,
       jugadorActivo: orden[0] ?? null,
       unidadActiva: null,
+      puestosUsados: [],
+      reforzados: [],
+      desplieguePasado: {},
     };
-
-    return {
-      ok: true,
-      events: [
-        { type: 'TurnoIniciado', turno: this.state.turno },
-        { type: 'IniciativaTirada', tiradas, orden },
-      ],
-    };
+    const events: GameEvent[] = [{ type: 'IniciativaTirada', turno: this.state.turno, tiradas, orden }];
+    // Si nadie puede desplegar nada, se pasa directo a jugar.
+    if (!this.puedeDesplegarAlgo(orden[0]!)) events.push(...this.pasarVezDespliegue());
+    return ok(events);
   }
 
-  // --------------------------------------------------------------- Activación
+  // ------------------------------------------------------------- Despliegue
 
-  private activate(unitId: string): CommandResult {
-    if (this.state.fase !== 'Activaciones') return fail('No es la Fase de Activaciones');
-    if (this.state.unidadActiva) return fail(`La unidad ${this.state.unidadActiva} sigue activada`);
-
-    const u = this.unit(unitId);
-    if (!u) return fail(`No existe la unidad ${unitId}`);
-    if (u.vidas <= 0) return fail('La unidad está destruida');
-    if (u.activated) return fail('La unidad ya se activó este turno');
-    if (u.owner !== this.state.jugadorActivo) {
-      return fail(`No es el turno de ${u.owner}, activa ${this.state.jugadorActivo}`);
-    }
-
-    this.patchUnit(unitId, {
-      accionesRestantes: 2,
-      accionesUsadas: [],
-      seMovio: false,
-      corrio: false,
-      cargo: false,
-      ataqueGratuitoContra: null,
-    });
-    this.state = { ...this.state, unidadActiva: unitId };
-
-    return { ok: true, events: [{ type: 'UnidadActivada', unitId, jugador: u.owner }] };
+  /** ¿Le queda algo que sacar este turno? */
+  puedeDesplegarAlgo(j: PlayerId): boolean {
+    if (this.state.desplieguePasado[j]) return false;
+    const suyas = this.state.reserva.filter((r) => r.owner === j);
+    if (suyas.length === 0) return false;
+    if (this.state.puestos.some((p) => puedeDesplegarEn(this.state, p, j))) return true;
+    return Object.values(this.state.unidades).some(
+      (u) => u.owner === j && suyas.some((r) => this.motivoRefuerzo(u, r.id) === null),
+    );
   }
 
-  /** Comprueba las reglas comunes a toda acción y devuelve el error si las viola. */
-  private checkAction(unitId: string, accion: ActionKind): string | null {
-    if (this.state.unidadActiva !== unitId) return 'La unidad no está activada';
-    const u = this.unit(unitId);
-    if (!u) return `No existe la unidad ${unitId}`;
-    if (u.vidas <= 0) return 'La unidad está destruida';
-
-    // El ataque gratuito de la carga no cuesta acciones ni cuenta como usada.
-    const esGratuito = accion === 'AtacarCaC' && u.ataqueGratuitoContra !== null;
-    const coste = esGratuito ? 0 : ACTION_COST[accion];
-    if (u.accionesRestantes < coste) {
-      return `Acciones insuficientes: ${accion} cuesta ${coste} y quedan ${u.accionesRestantes}`;
-    }
-    if (!esGratuito && u.accionesUsadas.includes(accion)) {
-      return `No se puede repetir ${accion} en la misma activación`;
-    }
-    // Una unidad trabada solo puede Atacar cuerpo a cuerpo o Destrabarse.
-    // Vehículos y Monstruos son la excepción: usan sus acciones con libertad.
-    if (
-      u.trabadaCon.length > 0 &&
-      accion !== 'AtacarCaC' &&
-      accion !== 'Destrabarse' &&
-      !this.ignoraTrabado(u)
-    ) {
-      const arma = accion === 'Disparar' ? this.multiusoWeapon(u) : null;
-      if (!arma) return 'La unidad está trabada: solo puede Atacar cuerpo a cuerpo o Destrabarse';
-    }
-    return null;
-  }
-
-  /** Un arma con Multiuso permite disparar estando trabado. */
-  private multiusoWeapon(u: Unit): RangedWeapon | null {
-    if (!this.habilidadesArma) return null;
-    const p = this.profileOf(u);
-    if (!p) return null;
-    for (const w of p.armas) {
-      if (w.kind === 'disparo' && hasAbility(w.habilidades, 'Multiuso')) return w;
-    }
-    return null;
-  }
-
-  /** Vehículos y Monstruos no quedan bloqueados por estar trabados. */
-  private ignoraTrabado(u: Unit): boolean {
-    const p = this.profileOf(u);
-    return !!p && IGNORA_TRABADO.includes(p.clase);
-  }
-
-  /** Nombre de la habilidad de unidad, para consultarla sin repetir código. */
-  private habilidadDe(u: Unit): string | null {
-    if (!this.habilidadesUnidad) return null;
-    return this.profileOf(u)?.habilidad?.nombre ?? null;
-  }
-
-  /**
-   * Efectos de las habilidades de unidad que modifican la resolución de un
-   * ataque. Se calculan aquí y se pasan al combate como contexto.
-   */
-  private contextoAtaque(
-    atacante: Unit,
-    objetivo: Unit,
-    distancia: number,
-    enCobertura: boolean,
-    tipo: 'disparo' | 'cac',
-  ): AttackContext {
-    const hab = this.habilidadDe(atacante);
-    const habObjetivo = this.habilidadDe(objetivo);
-    const ctx: {
-      habilidadesArma: boolean;
-      distancia: number;
-      enCobertura: boolean;
-      dadosExtra?: number;
-      precisionMejorada?: number;
-      repetirFallos?: boolean;
-      defensorBerserker?: boolean;
-    } = { habilidadesArma: this.habilidadesArma, distancia, enCobertura };
-
-    if (tipo === 'disparo') {
-      // Certero y Emplazado premian quedarse quieto.
-      if (hab === 'Certero' && !atacante.seMovio) ctx.precisionMejorada = 1;
-      if (hab === 'Emplazado' && !atacante.seMovio) ctx.dadosExtra = 1;
-      if (hab === 'Tirador') ctx.repetirFallos = true;
-    } else {
-      if (hab === 'Carga brutal' && atacante.cargo) ctx.dadosExtra = 1;
-      if (habObjetivo === 'Berserker') ctx.defensorBerserker = true;
-    }
-    return ctx;
-  }
-
-  private spend(unitId: string, accion: ActionKind): GameEvent {
-    const u = this.unit(unitId)!;
-    if (accion === 'AtacarCaC' && u.ataqueGratuitoContra !== null) {
-      // Gratuito: se consume el derecho, no las acciones.
-      this.patchUnit(unitId, { ataqueGratuitoContra: null });
-      return { type: 'AccionUsada', unitId, accion, coste: 0 };
-    }
-    const coste = ACTION_COST[accion];
-    this.patchUnit(unitId, {
-      accionesRestantes: u.accionesRestantes - coste,
-      accionesUsadas: [...u.accionesUsadas, accion],
-    });
-    return { type: 'AccionUsada', unitId, accion, coste };
-  }
-
-  // --------------------------------------------------------------- Movimiento
-
-  /**
-   * Busca dónde plantar al atacante en contacto con su objetivo: se prueba la
-   * línea recta y, si está ocupada, se va rodeando al objetivo a un lado y a
-   * otro. Devuelve también el camino, que es lo que cuesta llegar.
-   */
-  private huecoParaCargar(
-    u: Unit,
-    p: UnitProfile,
-    t: Unit,
-    tp: UnitProfile,
-    bloqueantes: readonly import('./geometry.ts').Rect[],
-    alcance: number,
-  ): { contacto: Vec2; camino: NonNullable<ReturnType<typeof caminoMasCorto>> } | null {
-    const separacion = p.radioPeana + tp.radioPeana;
-    const base = Math.atan2(u.position.y - t.position.y, u.position.x - t.position.x);
-    let mejor: { contacto: Vec2; camino: NonNullable<ReturnType<typeof caminoMasCorto>> } | null = null;
-
-    for (let paso = 0; paso <= 12; paso += 1) {
-      for (const signo of paso === 0 ? [1] : [1, -1]) {
-        const ang = base + signo * paso * (Math.PI / 12);
-        const contacto = add(t.position, scale({ x: Math.cos(ang), y: Math.sin(ang) }, separacion));
-        if (bloqueantes.some((r) => baseSolapaRect(contacto, p.radioPeana, r))) continue;
-        if (this.pisaAAlguien(contacto, p.radioPeana, [u.id, t.id])) continue;
-        const camino = caminoMasCorto(u.position, contacto, p.radioPeana, bloqueantes);
-        if (!camino) continue;
-        if (camino.longitud <= alcance + 1e-9) return { contacto, camino };
-        // Sin alcance, pero sirve para dar el motivo exacto del rechazo.
-        if (!mejor || camino.longitud < mejor.camino.longitud) mejor = { contacto, camino };
-      }
-    }
-    return mejor;
-  }
-
-  /** ¿Hay alguna miniatura viva solapando esa posición? */
-  private pisaAAlguien(pos: Vec2, radio: number, salvo: readonly string[]): boolean {
-    return Object.values(this.state.units).some((otra) => {
-      if (salvo.includes(otra.id) || otra.vidas <= 0) return false;
-      const op = this.profileOf(otra);
-      return !!op && centerDistance(pos, otra.position) < radio + op.radioPeana - 1e-9;
-    });
-  }
-
-  /**
-   * De quién es un Cuartel General "de fábrica". Se deduce de la partida: cada
-   * jugador empieza controlando el suyo, así que se guarda al arrancar.
-   */
-  private duenioOriginalDelCG(pm: Puesto): PlayerId | null {
-    return this.cuartelesIniciales.get(pm.id) ?? null;
-  }
-
-  /**
-   * Explosiva (X): si el objetivo sufre daño, hasta X miniaturas más a 3" de
-   * él sufren ese mismo daño directo, sin salvación.
-   *
-   * El reglamento deja que el atacante elija, aliadas o enemigas. Aquí se
-   * eligen solas y SOLO enemigas, de la más cercana a la más lejana: nadie
-   * elegiría meterle la metralla a los suyos, y así no hace falta preguntar a
-   * mitad de un disparo.
-   */
-  private alcanceExplosiva(atacanteId: string, impactadaId: string, maximo: number): string[] {
-    if (maximo <= 0 || !this.habilidadesArma) return [];
-    const atacante = this.unit(atacanteId);
-    const impactada = this.unit(impactadaId);
-    const pi = impactada ? this.profileOf(impactada) : undefined;
-    if (!atacante || !impactada || !pi) return [];
-
-    return Object.values(this.state.units)
-      .filter((o) => o.id !== impactadaId && o.id !== atacanteId && o.vidas > 0)
-      .filter((o) => o.owner !== atacante.owner)
-      .map((o) => {
-        const op = this.profileOf(o);
-        const d = op ? baseDistance(impactada.position, pi.radioPeana, o.position, op.radioPeana) : Infinity;
-        return { id: o.id, d };
-      })
-      .filter((x) => x.d <= DISTANCIA_EXPLOSIVA)
-      .sort((a, b) => a.d - b.d || a.id.localeCompare(b.id))
-      .slice(0, maximo)
-      .map((x) => x.id);
-  }
-
-  private aplicarExplosiva(
-    atacanteId: string,
-    impactadaId: string,
-    afectados: readonly string[],
-    danio: number,
-  ): GameEvent[] {
-    if (afectados.length === 0 || danio <= 0) return [];
-    const events: GameEvent[] = [
-      { type: 'ExplosivaAlcanza', attackerId: atacanteId, origenId: impactadaId, afectados, danio },
-    ];
-    for (const id of afectados) events.push(...this.applyDamage(id, danio, atacanteId));
-    return events;
-  }
-
-  /** Cierra la ventana de refuerzos y abre las activaciones. */
-  /**
-   * "Ya no despliego más" en el despliegue inicial. Cuando lo dicen todos,
-   * arranca el turno 1 solo: no hay botón de empezar.
-   */
-  private pasarDespliegue(player: PlayerId): CommandResult {
-    if (this.state.fase !== 'Despliegue') return fail('No es el despliegue inicial');
-    if (player !== this.state.jugadorActivo) {
-      return fail(`No es la vez de ${player}, juega ${this.state.jugadorActivo}`);
-    }
-    this.state = {
-      ...this.state,
-      desplieguePasado: { ...this.state.desplieguePasado, [player]: true },
-    };
-    return { ok: true, events: this.pasarVezDeDespliegue() };
-  }
-
-  /**
-   * Pasa la vez en el despliegue inicial, saltando a quien ya haya pasado o no
-   * tenga nada que sacar. Si no queda nadie, empieza la partida.
-   */
-  private pasarVezDeDespliegue(): GameEvent[] {
-    const puedeSeguir = (j: PlayerId): boolean =>
-      !this.state.desplieguePasado[j] && this.state.reserva.some((r) => r.owner === j);
-
+  private pasarVezDespliegue(): GameEvent[] {
     const orden = this.state.ordenIniciativa;
-    const actual = this.state.jugadorActivo;
-    const desde = actual ? orden.indexOf(actual) : -1;
+    const desde = this.state.jugadorActivo ? orden.indexOf(this.state.jugadorActivo) : -1;
     for (let i = 1; i <= orden.length; i++) {
-      const candidato = orden[(desde + i + orden.length) % orden.length];
-      if (candidato && puedeSeguir(candidato)) {
-        this.state = { ...this.state, jugadorActivo: candidato };
+      const j = orden[(desde + i + orden.length) % orden.length]!;
+      if (this.puedeDesplegarAlgo(j)) {
+        this.state = { ...this.state, jugadorActivo: j };
         return [];
       }
     }
-
-    // Nadie más va a desplegar: se abre el turno 1 sin preguntar.
-    this.state = {
-      ...this.state,
-      fase: 'Activaciones',
-      jugadorActivo: orden[0] ?? null,
-      unidadActiva: null,
-    };
-    return [{ type: 'TurnoIniciado', turno: this.state.turno }];
+    return this.abrirActivaciones();
   }
 
-  // ---------------------------------------------------------------- Refuerzos
-
-  /** Cuántos puestos de mando controla un jugador. Es su tope de refuerzos. */
-  private puestosControlados(player: PlayerId): number {
-    return this.state.puestos.filter((pm) => pm.duenio === player).length;
+  private abrirActivaciones(): GameEvent[] {
+    this.state = { ...this.state, fase: 'Activaciones', jugadorActivo: null };
+    const events: GameEvent[] = [{ type: 'ActivacionesAbiertas', turno: this.state.turno }];
+    const primero = this.state.ordenIniciativa.find((j) => this.tieneSinActivar(j));
+    if (!primero) {
+      this.state = { ...this.state, fase: 'FinDeTurno' };
+      events.push({ type: 'TurnoTerminado', turno: this.state.turno });
+      return events;
+    }
+    this.state = { ...this.state, jugadorActivo: primero };
+    return events;
   }
 
-  /**
-   * Saca una unidad de la Reserva y la pone en mesa sobre un puesto de mando.
-   *
-   * En el despliegue inicial es libre: colocas y le pasas la vez al rival. Ya
-   * en partida, meter un refuerzo **consume tu vez igual que una activación**,
-   * y cada turno puedes meter tantos como puestos controles.
-   */
-  private deploy(unitId: string, puestoId: string, posicion: Vec2): CommandResult {
-    const inicial = this.state.fase === 'Despliegue';
-    if (!inicial && this.state.fase !== 'Activaciones') {
-      return fail('No se puede desplegar ahora');
-    }
-    if (!inicial && this.state.unidadActiva) {
-      return fail(`Termina la activación de ${this.state.unidadActiva} antes de desplegar`);
-    }
+  private desplegar(reservaId: string, puestoId: string, posiciones: readonly Vec2[]): CommandResult {
+    if (this.state.fase !== 'Despliegue') return fail('No es el momento de desplegar');
+    const entrada = this.state.reserva.find((r) => r.id === reservaId);
+    if (!entrada) return fail(`${reservaId} no está en Reserva`);
+    if (entrada.owner !== this.state.jugadorActivo) return fail(`No es la vez de ${entrada.owner}`);
+    if (this.state.desplieguePasado[entrada.owner]) return fail('Ya has terminado de desplegar');
 
-    const entrada = this.state.reserva.find((r) => r.id === unitId);
-    if (!entrada) return fail(`La unidad ${unitId} no está en reserva`);
-    if (entrada.owner !== this.state.jugadorActivo) {
-      return fail(`No es la vez de ${entrada.owner}, juega ${this.state.jugadorActivo}`);
-    }
-    if (inicial && this.state.desplieguePasado[entrada.owner]) {
-      return fail('Ya has dicho que no despliegas más');
-    }
-    if (!inicial) {
-      const tope = this.puestosControlados(entrada.owner);
-      const usados = this.state.refuerzosUsados[entrada.owner] ?? 0;
-      if (usados >= tope) {
-        return fail(`Solo puedes meter ${tope} refuerzo(s) por turno: uno por puesto que controles`);
-      }
-    }
-    /*
-      Reglamento, despliegue: "la primera unidad que debe desplegar cada jugador
-      es su Héroe". Mientras siga en reserva, no sale nadie más.
-    */
-    const heroePendiente = this.state.reserva.find(
-      (r) => r.owner === entrada.owner && this.state.profiles[r.profileId]?.clase === 'Heroe',
-    );
-    if (heroePendiente && heroePendiente.id !== entrada.id) {
-      return fail('El Héroe tiene que desplegarse primero');
-    }
-    const p = this.state.profiles[entrada.profileId];
-    if (!p) return fail('Perfil no encontrado');
-
-    const puesto = this.state.puestos.find((x) => x.id === puestoId);
+    const puesto = this.state.puestos.find((p) => p.id === puestoId);
     if (!puesto) return fail(`No existe el puesto ${puestoId}`);
-    if (puesto.duenio !== entrada.owner) return fail('El puesto no está bajo tu control');
-    if (!puedeDesplegarEn(this.state, puesto, entrada.owner)) {
-      return fail('Hay enemigos en el puesto: no se puede desplegar');
-    }
-    if (!dentroDelPuesto(posicion, p.radioPeana, puesto)) {
-      return fail('La peana debe caber entera dentro del puesto');
-    }
-    if (!libreDeUnidades(this.state, posicion, p.radioPeana, 0)) {
-      return fail('Ahí ya hay una miniatura');
-    }
-    const encima = this.state.terrain.find((t) => baseSolapaRect(posicion, p.radioPeana, t.rect));
-    if (encima) return fail(`No se puede desplegar sobre ${encima.id}`);
-    const cerca = this.enemyWithinDe(entrada.owner, posicion, p.radioPeana, ZONA_CONTROL);
-    if (cerca) return fail(`No se puede desplegar a ${ZONA_CONTROL}\" o menos del enemigo ${cerca}`);
+    if (puesto.duenio !== entrada.owner) return fail('Ese puesto no es tuyo');
+    if (this.state.puestosUsados.includes(puesto.id)) return fail('Por ese puesto ya ha entrado una unidad este turno');
+    if (!puedeDesplegarEn(this.state, puesto, entrada.owner)) return fail('Hay enemigos en el puesto');
+    if (posiciones.length !== entrada.minis.length) return fail('Falta colocar alguna miniatura');
 
-    const unidad: Unit = {
+    const iAncla = Math.max(0, entrada.minis.findIndex((m) => m.esComandante));
+    const tAncla = this.tipo(entrada.minis[iAncla]!.tipoId);
+    if (!tocaPuesto(puesto, posiciones[iAncla]!, tAncla.radioPeana)) {
+      return fail(entrada.minis.length > 1 ? 'El Comandante tiene que tocar el puesto' : 'Tiene que tocar el puesto');
+    }
+
+    const R = restriccionesPara(this.state, entrada.owner, null, DISTANCIA_ENEMIGO);
+    const colocadas: { centro: Vec2; radio: number }[] = [];
+    for (let i = 0; i < entrada.minis.length; i++) {
+      const t = this.tipo(entrada.minis[i]!.tipoId);
+      const motivo = motivoSitio(posiciones[i]!, t.radioPeana, R, colocadas);
+      if (motivo) return fail(`No cabe: ${motivo}`);
+      colocadas.push({ centro: posiciones[i]!, radio: t.radioPeana });
+    }
+    if (!esCoherente(colocadas)) return fail('La escuadra tiene que quedar en coherencia (1")');
+
+    const minis: Mini[] = entrada.minis.map((m, i) => ({
+      id: `${entrada.id}.${i}`,
+      tipoId: m.tipoId,
+      posicion: posiciones[i]!,
+      vidas: this.tipo(m.tipoId).vidas,
+      esComandante: m.esComandante,
+    }));
+    const unidad: Unidad = {
       id: entrada.id,
-      profileId: entrada.profileId,
       owner: entrada.owner,
-      position: posicion,
-      vidas: p.vidas,
-      activated: false,
-      accionesRestantes: 2,
+      minis,
+      activada: false,
+      accionesRestantes: 0,
       accionesUsadas: [],
       trabadaCon: [],
       seMovio: false,
       corrio: false,
       cargo: false,
-      destruidaEnTurno: null,
       ataqueGratuitoContra: null,
+      resistenteUsado: false,
     };
     this.state = {
       ...this.state,
-      units: { ...this.state.units, [unidad.id]: unidad },
-      reserva: this.state.reserva.filter((r) => r.id !== unitId),
-      refuerzosUsados: inicial
-        ? this.state.refuerzosUsados
-        : {
-            ...this.state.refuerzosUsados,
-            [entrada.owner]: (this.state.refuerzosUsados[entrada.owner] ?? 0) + 1,
-          },
+      unidades: { ...this.state.unidades, [unidad.id]: unidad },
+      reserva: this.state.reserva.filter((r) => r.id !== reservaId),
+      puestosUsados: [...this.state.puestosUsados, puesto.id],
     };
-
-    const events: GameEvent[] = [{ type: 'UnidadDesplegada', unitId, puestoId, posicion }];
-    /*
-      Desplegar gasta la vez, así que después juega el rival. En el despliegue
-      inicial es lo mismo: se alterna unidad por unidad.
-    */
-    events.push(...(inicial ? this.pasarVezDeDespliegue() : this.pasarVez()));
-    return { ok: true, events };
+    return ok([
+      { type: 'UnidadDesplegada', unidadId: unidad.id, owner: unidad.owner, puestoId },
+      ...this.pasarVezDespliegue(),
+    ]);
   }
 
-  private move(unitId: string, destino: Vec2, accion: 'Mover' | 'Correr'): CommandResult {
-    const err = this.checkAction(unitId, accion);
-    if (err) return fail(err);
-
-    const u = this.unit(unitId)!;
-    const p = this.profileOf(u);
-    if (!p) return fail('Perfil no encontrado');
-    if (p.clase === 'Artilleria') return fail('La Artillería no puede moverse');
-
-    const permitido = accion === 'Correr' ? p.movimiento + p.velocidad : p.movimiento;
-    /*
-      La distancia que cuenta es la RECORRIDA, no la línea recta: con un muro
-      delante se puede ir hasta su esquina y girar, y eso cuesta lo que mide el
-      rodeo. Antes se medía en recto y además se exigía que el recto estuviera
-      limpio, así que pegado a una esquina no se podía ir a ninguna parte.
-    */
-    const camino = caminoMasCorto(
-      u.position,
-      destino,
-      p.radioPeana,
-      this.state.terrain.filter(bloqueaPaso).map((t) => t.rect),
-    );
-    if (!camino) return fail('No hay camino hasta ahí: la escenografía lo corta');
-    const recorrido = camino.longitud;
-    if (recorrido > permitido + 1e-9) {
-      return fail(`Movimiento excedido: ${recorrido.toFixed(2)}" supera ${permitido}"`);
-    }
-
-    /*
-      Moviendo solo está prohibido acabar en CONTACTO con un enemigo: a contacto
-      se llega únicamente cargando. Acercarse a 1" o menos sí vale, y es lo que
-      permite montar un ataque suelto para el turno siguiente.
-
-      Corriendo se mantiene la zona de 1": quien corre no puede plantarse encima
-      del enemigo.
-    */
-    const margen = accion === 'Correr' ? ZONA_CONTROL : 0;
-    const conflicto = this.enemyWithin(unitId, destino, p.radioPeana, margen);
-    if (conflicto) {
-      return fail(
-        margen === 0
-          ? `No se puede terminar el movimiento en contacto con el enemigo ${conflicto}`
-          : `Corriendo no se puede terminar a ${ZONA_CONTROL}" o menos del enemigo ${conflicto}`,
-      );
-    }
-
-    /*
-      La escenografía se valida aquí y no solo en la interfaz: el núcleo es el
-      que manda sobre las reglas, y así cualquier cliente futuro las hereda.
-    */
-    /*
-      Ni encima de otra miniatura. No estaba comprobado: con varias unidades
-      yendo al mismo sitio acababan apiladas una sobre otra.
-    */
-    const pisada = Object.values(this.state.units).find((otra) => {
-      if (otra.id === unitId || otra.vidas <= 0) return false;
-      const op = this.profileOf(otra);
-      if (!op) return false;
-      // Entre centros: `baseDistance` se queda en 0 al solapar y no distingue.
-      return centerDistance(destino, otra.position) < p.radioPeana + op.radioPeana - 1e-9;
-    });
-    if (pisada) return fail(`No se puede terminar el movimiento encima de ${pisada.id}`);
-
-    const dentro = this.state.terrain.find((t) => baseSolapaRect(destino, p.radioPeana, t.rect));
-    if (dentro) return fail(`No se puede terminar el movimiento sobre ${dentro.id}`);
-
-    const desde = u.position;
-    const events: GameEvent[] = [this.spend(unitId, accion)];
-    this.patchUnit(unitId, {
-      position: destino,
-      seMovio: true,
-      corrio: accion === 'Correr',
-    });
-    events.push({ type: 'UnidadMovida', unitId, desde, hasta: destino, distancia: recorrido });
-    return { ok: true, events };
-  }
-
-  /** Id del primer enemigo a `margen` pulgadas o menos de la posición dada. */
-  private enemyWithin(unitId: string, pos: Vec2, radius: number, margen: number): string | null {
-    const u = this.unit(unitId)!;
-    return this.enemyWithinDe(u.owner, pos, radius, margen, unitId);
-  }
-
-  /** Igual, pero por bando: sirve también para una unidad que aún no está en mesa. */
-  private enemyWithinDe(
-    owner: PlayerId,
-    pos: Vec2,
-    radius: number,
-    margen: number,
-    excluir?: string,
-  ): string | null {
-    for (const other of Object.values(this.state.units)) {
-      if (other.id === excluir || other.owner === owner || other.vidas <= 0) continue;
-      const op = this.profileOf(other);
-      if (!op) continue;
-      if (baseDistance(pos, radius, other.position, op.radioPeana) <= margen) return other.id;
-    }
+  /** Por qué este Comandante no puede recibir esa miniatura. `null` si puede. */
+  motivoRefuerzo(u: Unidad, reservaId: string): string | null {
+    const entrada = this.state.reserva.find((r) => r.id === reservaId);
+    if (!entrada || entrada.owner !== u.owner) return 'no está en tu Reserva';
+    if (!comandanteDe(u)) return 'solo los Comandantes reciben refuerzos';
+    if (this.state.reforzados.includes(u.id)) return 'ya ha recibido su refuerzo este turno';
+    if (u.trabadaCon.length > 0) return 'está trabado en combate';
+    if (entrada.minis.length !== 1 || entrada.minis[0]!.esComandante) return 'solo entra una miniatura suelta';
+    const t = this.tipo(entrada.minis[0]!.tipoId);
+    if (t.escuadra === null) return `${t.nombre} no forma escuadras`;
+    const tropa = tropaDe(u);
+    if (tropa.length > 0 && tropa[0]!.tipoId !== t.id) return `la escuadra es de ${this.tipo(tropa[0]!.tipoId).nombre}`;
+    if (tropa.length >= t.escuadra) return 'la escuadra está completa';
     return null;
   }
 
-  // ------------------------------------------------------------------ Disparo
+  private reforzar(unidadId: string, reservaId: string, posicion: Vec2): CommandResult {
+    if (this.state.fase !== 'Despliegue') return fail('No es el momento de desplegar');
+    const u = this.unidad(unidadId);
+    if (!u) return fail(`No existe ${unidadId}`);
+    if (u.owner !== this.state.jugadorActivo) return fail(`No es la vez de ${u.owner}`);
+    if (this.state.desplieguePasado[u.owner]) return fail('Ya has terminado de desplegar');
+    const motivo = this.motivoRefuerzo(u, reservaId);
+    if (motivo) return fail(`No puede reforzar: ${motivo}`);
 
-  private shoot(unitId: string, targetId: string, armaNombre: string): CommandResult {
-    const err = this.checkAction(unitId, 'Disparar');
-    if (err) return fail(err);
-
-    const u = this.unit(unitId)!;
-    const p = this.profileOf(u);
-    const t = this.unit(targetId);
-    if (!p) return fail('Perfil del atacante no encontrado');
-    if (!t) return fail(`No existe el objetivo ${targetId}`);
-    if (t.vidas <= 0) return fail('El objetivo ya está destruido');
-    if (t.owner === u.owner) return fail('No se puede disparar a una unidad aliada');
-    const tp = this.profileOf(t);
-    if (!tp) return fail('Perfil del objetivo no encontrado');
-
-    if (u.corrio) return fail('La unidad corrió: no puede atacar esta activación');
-
-    const arma = p.armas.find((w) => w.kind === 'disparo' && w.nombre === armaNombre) as
-      | RangedWeapon
-      | undefined;
-    if (!arma) return fail(`El arma a distancia "${armaNombre}" no está en el perfil`);
-
-    // Atacante trabado: necesita Multiuso, salvo Vehículos y Monstruos.
-    if (u.trabadaCon.length > 0 && !this.ignoraTrabado(u)) {
-      if (!this.habilidadesArma || !hasAbility(arma.habilidades, 'Multiuso')) {
-        return fail('Trabada: solo se puede disparar con un arma con Multiuso');
-      }
-      if (!u.trabadaCon.includes(targetId)) {
-        return fail('Multiuso solo permite disparar a la unidad con la que se combate');
-      }
+    const entrada = this.state.reserva.find((r) => r.id === reservaId)!;
+    const t = this.tipo(entrada.minis[0]!.tipoId);
+    const R = restriccionesPara(this.state, u.owner, u.id, DISTANCIA_ENEMIGO);
+    const propias = u.minis.map((m) => ({ centro: m.posicion, radio: this.tipo(m.tipoId).radioPeana }));
+    const sitio = motivoSitio(posicion, t.radioPeana, R, propias);
+    if (sitio) return fail(`No cabe: ${sitio}`);
+    if (!esCoherente([...propias, { centro: posicion, radio: t.radioPeana }])) {
+      return fail('Tiene que entrar en coherencia con la escuadra (1")');
     }
 
-    // Objetivo trabado: no puede ser disparado desde fuera del combate.
-    // Excepción: Vehículos y Monstruos sí pueden serlo.
-    if (t.trabadaCon.length > 0 && !this.ignoraTrabado(t) && !t.trabadaCon.includes(unitId)) {
-      return fail('El objetivo está trabado en cuerpo a cuerpo: no puede ser disparado desde fuera');
-    }
-
-    // Terror: nadie puede dispararle a 12" o menos.
-    if (this.habilidadDe(t) === 'Terror') {
-      const d = baseDistance(u.position, p.radioPeana, t.position, tp.radioPeana);
-      if (d <= 12) return fail('Terror: no se puede disparar a esta unidad a 12" o menos');
-    }
-
-    const distancia = baseDistance(u.position, p.radioPeana, t.position, tp.radioPeana);
-    if (distancia > arma.distancia) {
-      return fail(`Fuera de alcance: ${distancia.toFixed(2)}" supera ${arma.distancia}"`);
-    }
-    if (this.habilidadesArma && anguloMuertoBloquea(arma, distancia)) {
-      return fail(
-        `Ángulo muerto: no puede disparar por debajo de ${(arma.distancia / 2).toFixed(1)}"`,
-      );
-    }
-
-    if (!this.habilidadesArma || !hasAbility(arma.habilidades, 'Parabólica')) {
-      const los = lineOfSight(this.state, u, p, t, tp);
-      if (!los.visible) return fail('Sin línea de visión al objetivo');
-    }
-
-    const enCobertura = hasCover(this.state, u, p, t, tp);
-    const resultado = resolveRangedAttack(
-      this.rng,
-      arma,
-      p,
-      tp,
-      this.contextoAtaque(u, t, distancia, enCobertura, 'disparo'),
-    );
-
-    const events: GameEvent[] = [this.spend(unitId, 'Disparar')];
-    events.push({ type: 'DisparoResuelto', attackerId: unitId, targetId, arma: arma.nombre, resultado });
-    // La onda expansiva se decide antes de aplicar el daño: si el objetivo cae,
-    // sigue contando como la miniatura impactada a efectos de los 3".
-    const alcanzadas = this.alcanceExplosiva(unitId, targetId, resultado.explosivaObjetivos);
-    events.push(...this.applyDamage(targetId, resultado.danioTotal, unitId));
-    events.push(...this.aplicarExplosiva(unitId, targetId, alcanzadas, resultado.danioTotal));
-    if (resultado.danioRetroceso > 0) {
-      events.push(...this.applyDamage(unitId, resultado.danioRetroceso));
-    }
-    return { ok: true, events };
+    const nueva: Mini = { id: `${u.id}.${entrada.id}`, tipoId: t.id, posicion, vidas: t.vidas, esComandante: false };
+    this.parchear(u.id, { minis: [...u.minis, nueva] });
+    this.state = {
+      ...this.state,
+      reserva: this.state.reserva.filter((r) => r.id !== reservaId),
+      reforzados: [...this.state.reforzados, u.id],
+    };
+    return ok([{ type: 'MiniaturaReforzada', unidadId: u.id, miniId: nueva.id }, ...this.pasarVezDespliegue()]);
   }
 
-  // -------------------------------------------------------------------- Carga
-
-  private charge(unitId: string, targetId: string): CommandResult {
-    const err = this.checkAction(unitId, 'Cargar');
-    if (err) return fail(err);
-
-    const u = this.unit(unitId)!;
-    const p = this.profileOf(u);
-    const t = this.unit(targetId);
-    if (!p || !t) return fail('Unidad u objetivo no encontrados');
-    if (t.owner === u.owner) return fail('No se puede cargar contra un aliado');
-    const tp = this.profileOf(t);
-    if (!tp) return fail('Perfil del objetivo no encontrado');
-
-    const alcance = p.movimiento + p.velocidad;
-
-    /*
-      La carga es un movimiento como cualquier otro: ni atraviesa lo que bloquea
-      el paso ni se mide en línea recta. Puede doblar por una esquina, y lo que
-      cuenta para el alcance es el recorrido real.
-    */
-    const bloqueantes = this.state.terrain.filter(bloqueaPaso).map((x) => x.rect);
-    /*
-      El punto de contacto no tiene por qué ser el de la línea recta: si ahí ya
-      hay otra miniatura se rodea al objetivo hasta encontrar hueco. Sin esto la
-      carga apilaba al atacante encima de un tercero.
-    */
-    const sitio = this.huecoParaCargar(u, p, t, tp, bloqueantes, alcance);
-    if (!sitio) return fail('No hay sitio libre para trabar con el objetivo');
-    const { contacto, camino } = sitio;
-    if (camino.longitud > alcance + 1e-9) {
-      return fail(`Carga fuera de alcance: ${camino.longitud.toFixed(2)}" supera ${alcance}"`);
-    }
-    const dir = normalize({ x: contacto.x - t.position.x, y: contacto.y - t.position.y });
-
-    const events: GameEvent[] = [this.spend(unitId, 'Cargar')];
-    const dado = this.rng.d6();
-    const exito = dado >= UMBRAL_CARGA;
-
-    /*
-      Al fallar la carga la miniatura se frena a 1" del objetivo. Si ahí hay
-      alguien, se queda donde estaba: mejor no haber avanzado que acabar encima
-      de un tercero.
-    */
-    const frenada = add(t.position, scale(dir, p.radioPeana + tp.radioPeana + ZONA_CONTROL));
-    const destino = exito
-      ? contacto
-      : this.pisaAAlguien(frenada, p.radioPeana, [unitId, targetId])
-        ? u.position
-        : frenada;
-
-    this.patchUnit(unitId, { position: destino, seMovio: true, cargo: exito });
-    events.push({ type: 'CargaResuelta', unitId, targetId, dado, exito });
-
-    if (!exito) {
-      // Se frena a 1" y su activación termina.
-      this.patchUnit(unitId, { accionesRestantes: 0 });
-      events.push(...this.finishActivation(unitId));
-      return { ok: true, events };
-    }
-
-    // Éxito: quedan trabadas y queda pendiente un ataque gratuito, que el
-    // jugador lanza cuando quiera. La activación NO termina aquí: si acabara,
-    // no habría ocasión de hacer ese ataque.
-    this.engage(unitId, targetId);
-    events.push({ type: 'UnidadesTrabadas', a: unitId, b: targetId });
-
-    // Atropello: al trabar durante la carga, el objetivo sufre 1D3 automáticos.
-    if (this.habilidadDe(u) === 'Atropello') {
-      const d = this.rng.d3();
-      events.push(...this.applyDamage(targetId, d, unitId));
-    }
-
-    const objetivoVivo = this.unit(targetId);
-    if (objetivoVivo && objetivoVivo.vidas > 0) {
-      this.patchUnit(unitId, { ataqueGratuitoContra: targetId });
-      events.push({ type: 'AtaqueGratuitoPendiente', unitId, targetId });
-      return { ok: true, events };
-    }
-
-    events.push(...this.finishActivation(unitId));
-    return { ok: true, events };
+  private pasarDespliegue(jugador: PlayerId): CommandResult {
+    if (this.state.fase !== 'Despliegue') return fail('No es el momento de desplegar');
+    if (jugador !== this.state.jugadorActivo) return fail(`No es la vez de ${jugador}`);
+    this.state = { ...this.state, desplieguePasado: { ...this.state.desplieguePasado, [jugador]: true } };
+    return ok([{ type: 'DesplieguePasado', jugador }, ...this.pasarVezDespliegue()]);
   }
 
-  // ------------------------------------------------------------ Cuerpo a cuerpo
+  // ------------------------------------------------------------- Activación
 
-  private melee(unitId: string, targetId: string, armaNombre: string): CommandResult {
-    const err = this.checkAction(unitId, 'AtacarCaC');
-    if (err) return fail(err);
-
-    const u = this.unit(unitId)!;
-    const p = this.profileOf(u);
-    const t = this.unit(targetId);
-    if (!p || !t) return fail('Unidad u objetivo no encontrados');
-    const tp = this.profileOf(t);
-    if (!tp) return fail('Perfil del objetivo no encontrado');
-    const arma = p.armas.find((w) => w.kind === 'cuerpo_a_cuerpo' && w.nombre === armaNombre) as
-      | MeleeWeapon
-      | undefined;
-    if (!arma) return fail(`El arma de cuerpo a cuerpo "${armaNombre}" no está en el perfil`);
-
-    /*
-      Dos formas de pegarse, y ninguna traba salvo la carga:
-        - Trabado: se llegó por carga y siguen en contacto.
-        - Ataque suelto: el enemigo está a 1" o menos sin estar trabado. Ni el
-          atacante ni el objetivo quedan trabados, así que los dos siguen
-          libres de moverse o disparar en su activación.
-      Alcance amplía el suelto hasta 3", y tampoco traba.
-    */
-    const distancia = baseDistance(u.position, p.radioPeana, t.position, tp.radioPeana);
-    const conAlcance = this.habilidadesArma && hasAbility(arma.habilidades, 'Alcance');
-    if (!u.trabadaCon.includes(targetId)) {
-      const suelto = conAlcance ? ALCANCE_SUELTO : ALCANCE_CAC;
-      if (distancia > suelto + 1e-9) {
-        return fail(
-          `El objetivo está a ${distancia.toFixed(2)}", más de ${suelto}": hay que estar trabado o a ${suelto}" o menos`,
-        );
-      }
-    }
-
-    const events: GameEvent[] = [this.spend(unitId, 'AtacarCaC')];
-
-    // Barrido ataca a todas las unidades trabadas con esta, una por una.
-    const objetivos = this.habilidadesArma && hasAbility(arma.habilidades, 'Barrido')
-      ? [...new Set([targetId, ...u.trabadaCon])]
-      : [targetId];
-    if (objetivos.length > 1) {
-      events.push({ type: 'BarridoDeclarado', unitId, objetivos });
-    }
-
-    for (const oid of objetivos) {
-      const o = this.unit(oid);
-      const op = o ? this.profileOf(o) : undefined;
-      if (!o || !op || o.vidas <= 0) continue;
-      const cobertura = hasCover(this.state, u, p, o, op);
-      const d = baseDistance(u.position, p.radioPeana, o.position, op.radioPeana);
-      const resultado = resolveMeleeAttack(
-        this.rng,
-        arma,
-        p,
-        op,
-        this.contextoAtaque(u, o, d, cobertura, 'cac'),
-      );
-      events.push({ type: 'CaCResuelto', attackerId: unitId, targetId: oid, arma: arma.nombre, resultado });
-      const alcanzadasCaC = this.alcanceExplosiva(unitId, oid, resultado.explosivaObjetivos);
-      events.push(...this.applyDamage(oid, resultado.danioTotal, unitId));
-      events.push(...this.aplicarExplosiva(unitId, oid, alcanzadasCaC, resultado.danioTotal));
-      if (resultado.danioRetroceso > 0) {
-        events.push(...this.applyDamage(unitId, resultado.danioRetroceso));
-      }
-    }
-
-    events.push(...this.finishActivation(unitId));
-    return { ok: true, events };
+  private tieneSinActivar(j: PlayerId): boolean {
+    return Object.values(this.state.unidades).some((u) => u.owner === j && !u.activada && u.minis.length > 0);
   }
 
-  private disengage(unitId: string): CommandResult {
-    const err = this.checkAction(unitId, 'Destrabarse');
-    if (err) return fail(err);
-
-    const u = this.unit(unitId)!;
-    if (u.trabadaCon.length === 0) return fail('La unidad no está trabada');
-
-    // Anclado: los enemigos trabados con esa unidad no pueden destrabarse.
-    const anclado = u.trabadaCon.some((id) => {
-      const o = this.unit(id);
-      return !!o && this.habilidadDe(o) === 'Anclado';
+  private activar(unidadId: string): CommandResult {
+    if (this.state.fase !== 'Activaciones') return fail('No es momento de activar');
+    if (this.state.unidadActiva) return fail(`${this.state.unidadActiva} sigue activada`);
+    const u = this.unidad(unidadId);
+    if (!u) return fail(`No existe ${unidadId}`);
+    if (u.activada) return fail('Ya se activó este turno');
+    if (u.owner !== this.state.jugadorActivo) return fail(`Le toca a ${this.state.jugadorActivo}`);
+    this.parchear(unidadId, {
+      accionesRestantes: 2,
+      accionesUsadas: [],
+      seMovio: false,
+      corrio: false,
+      cargo: false,
+      ataqueGratuitoContra: null,
     });
-    const porrazo = this.habilidadDe(u) === 'Porrazo';
-    if (anclado && !porrazo) {
-      return fail('Anclado: no puede destrabarse de esa unidad');
-    }
-
-    const events: GameEvent[] = [this.spend(unitId, 'Destrabarse')];
-    // Porrazo permite destrabarse sin efectuar el chequeo.
-    const dado = porrazo ? 6 : this.rng.d6();
-    const exito = porrazo || dado >= UMBRAL_DESTRABE;
-    events.push({ type: 'DestrabeResuelto', unitId, dado, exito });
-
-    if (exito) {
-      // Una única tirada separa de todas las unidades con las que combate.
-      for (const otherId of u.trabadaCon) this.disengagePair(unitId, otherId);
-      this.patchUnit(unitId, { trabadaCon: [] });
-    } else {
-      this.patchUnit(unitId, { accionesRestantes: 0 });
-      events.push(...this.finishActivation(unitId));
-    }
-    return { ok: true, events };
+    this.state = { ...this.state, unidadActiva: unidadId };
+    return ok([{ type: 'UnidadActivada', unidadId, jugador: u.owner }]);
   }
 
-  // ------------------------------------------------------------------- Estado
+  /** Comprueba las reglas comunes a toda acción. Devuelve el motivo si no se puede. */
+  motivoAccion(unidadId: string, accion: ActionKind): string | null {
+    if (this.state.unidadActiva !== unidadId) return 'la unidad no está activada';
+    const u = this.unidad(unidadId);
+    if (!u) return 'la unidad no existe';
+    const coste = ACTION_COST[accion];
+    if (u.accionesRestantes < coste) return `${accion} cuesta ${coste} y quedan ${u.accionesRestantes}`;
+    if (u.accionesUsadas.includes(accion)) return `${accion} ya se ha hecho en esta activación`;
+    if (u.corrio && (accion === 'Disparar' || accion === 'AtacarCaC' || accion === 'Cargar')) {
+      return 'después de correr no se puede atacar';
+    }
+    const t = tipoDe(this.state, u);
+    if ((accion === 'Mover' || accion === 'Correr' || accion === 'Cargar') && movimientoDe(this.state, u).movimiento === null) {
+      return `${t.nombre} no puede moverse`;
+    }
+    if (u.trabadaCon.length > 0) {
+      const libre = accion === 'AtacarCaC' || accion === 'Destrabarse' ||
+        (accion === 'Disparar' && t.habilidad === 'Fuego de apoyo');
+      if (!libre) return 'trabada en combate: solo puede atacar o destrabarse';
+    }
+    if (accion === 'AtacarCaC' && u.trabadaCon.length === 0) return 'no está trabada con nadie';
+    if (accion === 'Destrabarse' && u.trabadaCon.length === 0) return 'no está trabada';
+    return null;
+  }
+
+  private gastar(unidadId: string, accion: ActionKind, coste = ACTION_COST[accion]): GameEvent {
+    const u = this.unidad(unidadId)!;
+    this.parchear(unidadId, {
+      accionesRestantes: Math.max(0, u.accionesRestantes - coste),
+      accionesUsadas: [...u.accionesUsadas, accion],
+    });
+    return { type: 'AccionUsada', unidadId, accion, coste };
+  }
+
+  private cerrarActivacion(unidadId: string): GameEvent[] {
+    if (this.unidad(unidadId)) {
+      this.parchear(unidadId, { activada: true, accionesRestantes: 0, ataqueGratuitoContra: null });
+    }
+    this.state = { ...this.state, unidadActiva: null };
+    return [{ type: 'ActivacionTerminada', unidadId }, ...this.pasarVez()];
+  }
+
+  /** La vez pasa al siguiente que tenga algo sin activar. Si nadie, se acaba el turno. */
+  private pasarVez(): GameEvent[] {
+    if (this.state.fase !== 'Activaciones') return [];
+    const orden = this.state.ordenIniciativa;
+    const desde = this.state.jugadorActivo ? orden.indexOf(this.state.jugadorActivo) : -1;
+    for (let i = 1; i <= orden.length; i++) {
+      const j = orden[(desde + i + orden.length) % orden.length]!;
+      if (this.tieneSinActivar(j)) {
+        this.state = { ...this.state, jugadorActivo: j };
+        return [];
+      }
+    }
+    this.state = { ...this.state, fase: 'FinDeTurno', jugadorActivo: null, unidadActiva: null };
+    return [{ type: 'TurnoTerminado', turno: this.state.turno }];
+  }
+
+  // ------------------------------------------------------------- Movimiento
+
+  /** Hasta dónde puede llegar cada miniatura con esta acción. */
+  alcanceDe(u: Unidad, accion: 'Mover' | 'Correr' | 'Cargar'): number {
+    const { movimiento, velocidad } = movimientoDe(this.state, u);
+    if (movimiento === null) return 0;
+    return accion === 'Mover' ? movimiento : movimiento + velocidad;
+  }
 
   /**
-   * `causanteId` es quien inflige el daño: si la baja es suya, se apunta el
-   * Valor de la unidad destruida. Los retrocesos de un arma inestable pasan sin
-   * causante — matarte solo no da puntos a nadie.
+   * Valida un conjunto de posiciones finales para la unidad. Lo usa el motor al
+   * mover y la interfaz para pintar en rojo lo que no vale.
    */
-  private applyDamage(unitId: string, danio: number, causanteId?: string): GameEvent[] {
-    if (danio <= 0) return [];
-    const u = this.unit(unitId);
-    if (!u) return [];
-    const vidas = Math.max(0, u.vidas - danio);
-    this.patchUnit(unitId, { vidas });
-    const events: GameEvent[] = [{ type: 'DanioAplicado', unitId, danio, vidasRestantes: vidas }];
-    if (vidas === 0) {
-      this.patchUnit(unitId, { destruidaEnTurno: this.state.turno });
-      // Al morir deja de estar trabada con nadie.
-      for (const otherId of u.trabadaCon) this.disengagePair(unitId, otherId);
-      this.patchUnit(unitId, { trabadaCon: [] });
-      events.push({ type: 'UnidadDestruida', unitId });
-
-      // Puntos por la baja: vale lo que costaba la unidad.
-      const causante = causanteId ? this.unit(causanteId) : undefined;
-      const perfil = this.profileOf(u);
-      if (causante && perfil && causante.owner !== u.owner) {
-        const total = (this.state.puntos[causante.owner] ?? 0) + perfil.valor;
-        this.state = {
-          ...this.state,
-          puntos: { ...this.state.puntos, [causante.owner]: total },
-        };
-        events.push({
-          type: 'PuntosGanados', jugador: causante.owner, puntos: perfil.valor, total,
-        });
+  motivoPosiciones(
+    u: Unidad,
+    posiciones: Readonly<Record<string, Vec2>>,
+    alcance: number | null,
+    margenEnemigo: number | null,
+  ): string | null {
+    const R = restriccionesPara(this.state, u.owner, u.id, margenEnemigo);
+    const colocadas: { centro: Vec2; radio: number }[] = [];
+    for (const m of u.minis) {
+      const p = posiciones[m.id];
+      if (!p) return 'falta colocar alguna miniatura';
+      const t = this.tipo(m.tipoId);
+      if (alcance !== null) {
+        const r = recorrido(m.posicion, p, t.radioPeana, R.terreno);
+        if (r === null) return 'no hay camino hasta ahí';
+        if (r > alcance + 1e-6) return `una miniatura se pasa: ${r.toFixed(1)}" de ${alcance}"`;
       }
+      const motivo = motivoSitio(p, t.radioPeana, R, colocadas);
+      if (motivo) return motivo;
+      colocadas.push({ centro: p, radio: t.radioPeana });
+    }
+    if (!esCoherente(colocadas)) return 'la escuadra rompería la coherencia (1")';
+    return null;
+  }
+
+  private mover(unidadId: string, posiciones: Readonly<Record<string, Vec2>>, accion: 'Mover' | 'Correr'): CommandResult {
+    const motivo = this.motivoAccion(unidadId, accion);
+    if (motivo) return fail(motivo);
+    const u = this.unidad(unidadId)!;
+    // Fuera de una carga nadie acaba a menos de 1" de un enemigo, ni andando ni corriendo.
+    const error = this.motivoPosiciones(u, posiciones, this.alcanceDe(u, accion), DISTANCIA_ENEMIGO);
+    if (error) return fail(error);
+
+    const desde: Record<string, Vec2> = {};
+    const hasta: Record<string, Vec2> = {};
+    for (const m of u.minis) {
+      desde[m.id] = m.posicion;
+      hasta[m.id] = posiciones[m.id]!;
+    }
+    const gasto = this.gastar(unidadId, accion);
+    this.parchear(unidadId, {
+      minis: u.minis.map((m) => ({ ...m, posicion: posiciones[m.id]! })),
+      seMovio: true,
+      corrio: accion === 'Correr' || u.corrio,
+    });
+    return ok([gasto, { type: 'UnidadMovida', unidadId, desde, hasta, corriendo: accion === 'Correr' }]);
+  }
+
+  /** Las piezas de la unidad, listas para `formar`. */
+  piezasDe(u: Unidad): Pieza[] {
+    const ancla = anclaDe(u);
+    return u.minis.map((m) => ({
+      id: m.id,
+      radio: this.tipo(m.tipoId).radioPeana,
+      desde: m.posicion,
+      esAncla: m.id === ancla.id,
+    }));
+  }
+
+  // ---------------------------------------------------------------- Disparo
+
+  /** Los grupos de la unidad que pueden atacar con un arma de este tipo. */
+  private grupos(u: Unidad, kind: 'disparo' | 'cac'): Grupo[] {
+    const out: Grupo[] = [];
+    const tropa = tropaDe(u);
+    const comandante = comandanteDe(u);
+    const armaDe = (t: TipoUnidad): Arma | null => (kind === 'disparo' ? t.disparo : t.cac);
+    if (tropa.length > 0) {
+      const t = this.tipo(tropa[0]!.tipoId);
+      const arma = armaDe(t);
+      if (arma) out.push({ parte: comandante ? 'tropa' : 'unidad', minis: tropa, tipo: t, arma });
+    }
+    if (comandante) {
+      const t = this.tipo(comandante.tipoId);
+      const arma = armaDe(t);
+      if (arma) out.push({ parte: tropa.length > 0 ? 'comandante' : 'unidad', minis: [comandante], tipo: t, arma });
+    }
+    return out;
+  }
+
+  /**
+   * Las miniaturas del grupo que llegan al objetivo: con el objetivo dentro del
+   * alcance de su arma, midiendo desde cada una, y viéndolo. Cada una dispara
+   * por su cuenta, así que en una escuadra lejana solo tiran las que alcanzan.
+   */
+  tiradoresContra(u: Unidad, g: Grupo, objetivo: Unidad): Mini[] {
+    if (g.arma.kind !== 'disparo') return [];
+    const alcance = g.arma.distancia;
+    const sinVision = g.tipo.habilidad === 'Fuego indirecto' || g.tipo.habilidad === 'Poder mental';
+    const ignorar = new Set([u.id, objetivo.id]);
+    return g.minis.filter((m) => {
+      const r = this.tipo(m.tipoId).radioPeana;
+      return objetivo.minis.some((o) => {
+        const ro = this.tipo(o.tipoId).radioPeana;
+        if (baseDistance(m.posicion, r, o.posicion, ro) > alcance + 1e-9) return false;
+        return sinVision || veA(this.state, m, o, ignorar);
+      });
+    });
+  }
+
+  /** Por qué esta unidad no puede disparar a esa. `null` si puede. */
+  motivoDisparo(unidadId: string, objetivoId: string): string | null {
+    const m = this.motivoAccion(unidadId, 'Disparar');
+    if (m) return m;
+    const u = this.unidad(unidadId)!;
+    const o = this.unidad(objetivoId);
+    if (!o || o.owner === u.owner) return 'objetivo no válido';
+    if (o.trabadaCon.length > 0 && !disparableTrabado(tipoDe(this.state, o))) {
+      return 'está trabado en combate: no se le puede disparar';
+    }
+    const grupos = this.grupos(u, 'disparo');
+    if (grupos.length === 0) return 'no tiene arma a distancia';
+    if (!grupos.some((g) => this.tiradoresContra(u, g, o).length > 0)) return 'fuera de alcance o sin visión';
+    return null;
+  }
+
+  /** Situaciones de ataque de cada grupo, para resolver y para prever. */
+  situacionesDisparo(u: Unidad, o: Unidad): { grupo: Grupo; minis: Mini[]; situacion: Situacion }[] {
+    const out: { grupo: Grupo; minis: Mini[]; situacion: Situacion }[] = [];
+    for (const g of this.grupos(u, 'disparo')) {
+      const minis = this.tiradoresContra(u, g, o);
+      if (minis.length === 0 || g.arma.kind !== 'disparo') continue;
+      const arma = g.arma;
+      const ignoraCobertura = g.tipo.habilidad === 'Poder mental';
+      const cerca = minis.some((m) =>
+        o.minis.some(
+          (x) =>
+            baseDistance(m.posicion, this.tipo(m.tipoId).radioPeana, x.posicion, this.tipo(x.tipoId).radioPeana) <=
+            arma.distancia / 2 + 1e-9,
+        ),
+      );
+      const atrincheradas = g.tipo.habilidad === 'Atrincherado'
+        ? minis.filter((m) => {
+            const blanco = masCercana(o.minis, m.posicion);
+            return blanco ? disparaDesdeCobertura(this.state, m, blanco.posicion) : false;
+          }).length
+        : 0;
+      out.push({
+        grupo: g,
+        minis,
+        situacion: {
+          ...this.base(g, o),
+          minis: minis.length,
+          enCobertura: !ignoraCobertura && unidadEnCobertura(this.state, minis, o),
+          aMitadDeAlcance: cerca,
+          atrincherado: atrincheradas * 2 >= minis.length && atrincheradas > 0,
+          emplazado: g.tipo.habilidad === 'Emplazado' && !u.seMovio,
+        },
+      });
+    }
+    return out;
+  }
+
+  /** Lo común a cualquier ataque de un grupo contra una unidad. */
+  private base(g: Grupo, o: Unidad): Omit<Situacion, 'enCobertura'> {
+    const defensor = tipoDe(this.state, o);
+    return {
+      arma: g.arma,
+      minis: g.minis.length,
+      defensor,
+      // El Comandante no tiene ventaja de tipo, y nadie la tiene contra él.
+      tipoAtacante: g.parte === 'comandante' || g.tipo.esComandante ? null : g.tipo,
+      tipoObjetivo: defensor.esComandante ? null : defensor,
+    };
+  }
+
+  private disparar(unidadId: string, objetivoId: string): CommandResult {
+    const motivo = this.motivoDisparo(unidadId, objetivoId);
+    if (motivo) return fail(motivo);
+    const u = this.unidad(unidadId)!;
+    const o = this.unidad(objetivoId)!;
+    const events: GameEvent[] = [this.gastar(unidadId, 'Disparar')];
+
+    for (const { grupo, minis, situacion } of this.situacionesDisparo(u, o)) {
+      const objetivo = this.unidad(objetivoId);
+      if (!objetivo) break; // ya ha caído con la primera parte
+      const tirada = resolverAtaque(this.rng, parametrosAtaque(situacion));
+      events.push({
+        type: 'AtaqueResuelto',
+        atacanteId: unidadId,
+        objetivoId,
+        arma: 'disparo',
+        parte: grupo.parte,
+        minis: minis.length,
+        enCobertura: situacion.enCobertura,
+        gratuito: false,
+        tirada,
+      });
+      const desde = anclaDe(u).posicion;
+      const impactada = masCercana(objetivo.minis, desde);
+      events.push(...this.danar(objetivoId, tirada.total, unidadId, desde));
+      if (tiene(grupo.arma, 'Explosiva') && tirada.total > 0 && impactada) {
+        events.push(...this.explosiva(unidadId, impactada, grupo.arma.danio));
+      }
+      if (this.state.fase === 'Terminada') break;
+    }
+    return ok(events);
+  }
+
+  /**
+   * Explosiva: las miniaturas enemigas a 3" de la impactada sufren el daño base,
+   * sin salvación. No hay fuego amigo. Si caen varias de la misma escuadra, su
+   * daño se suma en un único total.
+   */
+  private explosiva(atacanteId: string, impactada: Mini, danio: number): GameEvent[] {
+    const atacante = this.unidad(atacanteId);
+    if (!atacante) return [];
+    const rImp = this.tipo(impactada.tipoId).radioPeana;
+    const events: GameEvent[] = [];
+    for (const u of Object.values(this.state.unidades)) {
+      if (u.owner === atacante.owner) continue;
+      const alcanzadas = u.minis.filter(
+        (m) => m.id !== impactada.id &&
+          baseDistance(m.posicion, this.tipo(m.tipoId).radioPeana, impactada.posicion, rImp) <= RADIO_EXPLOSIVA + 1e-9,
+      );
+      if (alcanzadas.length === 0) continue;
+      const total = alcanzadas.length * danio;
+      events.push({ type: 'ExplosivaAlcanza', atacanteId, unidadId: u.id, minis: alcanzadas.length, danio: total });
+      events.push(...this.danar(u.id, total, atacanteId, impactada.posicion));
+      if (this.state.fase === 'Terminada') break;
     }
     return events;
   }
 
-  private engage(a: string, b: string): void {
-    const ua = this.unit(a);
-    const ub = this.unit(b);
-    if (!ua || !ub) return;
-    if (!ua.trabadaCon.includes(b)) this.patchUnit(a, { trabadaCon: [...ua.trabadaCon, b] });
-    const ub2 = this.unit(b)!;
-    if (!ub2.trabadaCon.includes(a)) this.patchUnit(b, { trabadaCon: [...ub2.trabadaCon, a] });
+  // ------------------------------------------------------------------ Daño
+
+  /** Aplica daño a una unidad: Resistente, reparto entre miniaturas y bajas. */
+  private danar(unidadId: string, total: number, porId: string | null, desde: Vec2 | null): GameEvent[] {
+    const u = this.unidad(unidadId);
+    if (!u || total <= 0) return [];
+    const events: GameEvent[] = [];
+
+    let danio = total;
+    let reducido = 0;
+    if (tipoDe(this.state, u).habilidad === 'Resistente' && !u.resistenteUsado) {
+      reducido = Math.min(danio, this.rng.d3());
+      danio -= reducido;
+      this.parchear(unidadId, { resistenteUsado: true });
+    }
+
+    const actual = this.unidad(unidadId)!;
+    const { vivas, muertas } = repartirDanio(actual, danio, desde);
+    events.push({ type: 'DanioRecibido', unidadId, danio, reducido, muertas: muertas.map((m) => m.id), porId });
+
+    const atacante = porId ? this.unidad(porId) : undefined;
+    if (atacante && muertas.length > 0) {
+      const valor = muertas.reduce((s, m) => s + this.tipo(m.tipoId).valor, 0);
+      events.push(this.sumarPuntos(atacante.owner, valor, 'bajas'));
+    }
+
+    if (vivas.length > 0) {
+      this.parchear(unidadId, { minis: vivas });
+      return events;
+    }
+
+    // Sin miniaturas en pie: la unidad desaparece y suelta a quien tuviera trabado.
+    const unidades: Record<string, Unidad> = {};
+    for (const [id, otra] of Object.entries(this.state.unidades)) {
+      if (id === unidadId) continue;
+      unidades[id] = otra.trabadaCon.includes(unidadId)
+        ? {
+            ...otra,
+            trabadaCon: otra.trabadaCon.filter((x) => x !== unidadId),
+            ataqueGratuitoContra: otra.ataqueGratuitoContra === unidadId ? null : otra.ataqueGratuitoContra,
+          }
+        : otra;
+    }
+    this.state = {
+      ...this.state,
+      unidades,
+      unidadActiva: this.state.unidadActiva === unidadId ? null : this.state.unidadActiva,
+    };
+    events.push({ type: 'UnidadDestruida', unidadId, owner: u.owner, porId });
+
+    // Como en Advance Wars: quien se queda sin nada sobre la mesa, pierde.
+    const sinMesa = !Object.values(this.state.unidades).some((x) => x.owner === u.owner);
+    if (sinMesa) events.push(...this.terminar(this.rival(u.owner), `${u.owner} se ha quedado sin unidades en mesa`));
+    return events;
   }
 
-  private disengagePair(a: string, b: string): void {
-    const ub = this.unit(b);
-    if (ub) this.patchUnit(b, { trabadaCon: ub.trabadaCon.filter((id) => id !== a) });
+  private rival(j: PlayerId): PlayerId | null {
+    const vivos = this.state.jugadores.filter((x) => x !== j);
+    return vivos.length === 1 ? vivos[0]! : null;
   }
 
-  private endActivation(unitId: string): CommandResult {
-    if (this.state.unidadActiva !== unitId) return fail('Esa unidad no está activada');
-    return { ok: true, events: this.finishActivation(unitId) };
+  private terminar(ganador: PlayerId | null, motivo: string): GameEvent[] {
+    this.state = { ...this.state, fase: 'Terminada', ganador, jugadorActivo: null, unidadActiva: null };
+    return [{ type: 'PartidaTerminada', ganador, motivo }];
   }
 
-  /** Cierra la activación y pasa la vez. */
-  private finishActivation(unitId: string): GameEvent[] {
-    this.patchUnit(unitId, { activated: true, accionesRestantes: 0, ataqueGratuitoContra: null });
-    this.state = { ...this.state, unidadActiva: null };
-    return [{ type: 'ActivacionTerminada', unitId }, ...this.pasarVez()];
-  }
+  // -------------------------------------------------------- Cuerpo a cuerpo
 
   /**
-   * Le pasa la vez al siguiente jugador que tenga algo que hacer. Si no queda
-   * nadie —ni unidades sin activar ni refuerzos que meter—, el turno termina.
+   * Dónde quedaría el ancla al cargar contra esa unidad: el punto en contacto
+   * más barato de alcanzar, o `null` si no llega.
    */
-  private pasarVez(): GameEvent[] {
-    const siguiente = this.nextPlayer();
-    if (siguiente === null) {
-      this.state = { ...this.state, fase: 'FinDeTurno', jugadorActivo: null, unidadActiva: null };
-      return [{ type: 'TurnoTerminado', turno: this.state.turno }];
+  sitioDeCarga(u: Unidad, o: Unidad): { sitio: Vec2; contra: Mini; distancia: number } | null {
+    const ancla = anclaDe(u);
+    const rA = this.tipo(ancla.tipoId).radioPeana;
+    const alcance = this.alcanceDe(u, 'Cargar');
+    const R = restriccionesPara(this.state, u.owner, u.id, null);
+    let mejor: { sitio: Vec2; contra: Mini; distancia: number } | null = null;
+    for (const m of o.minis) {
+      const rM = this.tipo(m.tipoId).radioPeana;
+      // Primero el punto de contacto en línea recta; luego alrededor.
+      const recto = normalize(sub(ancla.posicion, m.posicion));
+      const angulos = [Math.atan2(recto.y, recto.x)];
+      for (let k = 0; k < 24; k++) angulos.push((k / 24) * Math.PI * 2);
+      for (const a of angulos) {
+        const sitio = add(m.posicion, scale(vec(Math.cos(a), Math.sin(a)), rA + rM + 0.001));
+        if (motivoSitio(sitio, rA, R) !== null) continue;
+        const d = recorrido(ancla.posicion, sitio, rA, R.terreno);
+        if (d === null || d > alcance + 1e-6) continue;
+        if (!mejor || d < mejor.distancia) mejor = { sitio, contra: m, distancia: d };
+      }
     }
-    this.state = { ...this.state, jugadorActivo: siguiente };
-    return [];
+    return mejor;
   }
 
-  /**
-   * Los jugadores alternan activaciones. Si a un jugador no le quedan unidades
-   * sin activar, se salta y sigue el siguiente que sí tenga.
-   */
-  private nextPlayer(): PlayerId | null {
-    const orden = this.state.ordenIniciativa;
-    const actual = this.state.jugadorActivo;
-    const start = actual ? orden.indexOf(actual) : -1;
-    for (let i = 1; i <= orden.length; i++) {
-      const candidato = orden[(start + i + orden.length) % orden.length];
-      if (candidato && this.hasPendingUnits(candidato)) return candidato;
+  /** Por qué no puede cargar contra esa unidad. `null` si puede. */
+  motivoCarga(unidadId: string, objetivoId: string): string | null {
+    const m = this.motivoAccion(unidadId, 'Cargar');
+    if (m) return m;
+    const u = this.unidad(unidadId)!;
+    const o = this.unidad(objetivoId);
+    if (!o || o.owner === u.owner) return 'objetivo no válido';
+    if (tipoDe(this.state, o).habilidad === 'Superioridad' && tipoDe(this.state, u).id !== 'titan') {
+      return 'solo otro Titán puede trabar a un Titán';
     }
+    if (!this.sitioDeCarga(u, o)) return `fuera de alcance de carga (${this.alcanceDe(u, 'Cargar')}")`;
     return null;
   }
 
-  /**
-   * ¿Le queda jugada a este jugador? Una unidad sin activar, o un refuerzo que
-   * meter: desplegar es una jugada más, así que mientras pueda hacerlo el turno
-   * no puede darse por acabado.
-   */
-  private hasPendingUnits(player: PlayerId): boolean {
-    const sinActivar = Object.values(this.state.units).some(
-      (u) => u.owner === player && !u.activated && u.vidas > 0,
-    );
-    if (sinActivar) return true;
-    return this.puedeReforzar(player);
-  }
+  private cargar(unidadId: string, objetivoId: string): CommandResult {
+    const motivo = this.motivoCarga(unidadId, objetivoId);
+    if (motivo) return fail(motivo);
+    const u = this.unidad(unidadId)!;
+    const o = this.unidad(objetivoId)!;
+    const { sitio, contra } = this.sitioDeCarga(u, o)!;
+    const alcance = this.alcanceDe(u, 'Cargar');
+    const piezas = this.piezasDe(u);
 
-  /** Le quedan unidades en reserva y turnos de refuerzo por gastar. */
-  private puedeReforzar(player: PlayerId): boolean {
-    if (!this.state.reserva.some((r) => r.owner === player)) return false;
-    const usados = this.state.refuerzosUsados[player] ?? 0;
-    if (usados >= this.puestosControlados(player)) return false;
-    return this.state.puestos.some((pm) => puedeDesplegarEn(this.state, pm, player));
-  }
+    // Se comprueba que la escuadra cabe ANTES de tirar: no tiene sentido tirar una carga imposible.
+    const llegada = formar(piezas, sitio, restriccionesPara(this.state, u.owner, u.id, null), alcance);
+    if (!llegada) return fail('No hay sitio para la escuadra al llegar');
 
-  private endTurn(): CommandResult {
-    if (this.state.fase !== 'FinDeTurno') return fail('El turno aún no ha terminado');
+    const desde: Record<string, Vec2> = {};
+    for (const m of u.minis) desde[m.id] = m.posicion;
+    const events: GameEvent[] = [this.gastar(unidadId, 'Cargar')];
+    const dado = this.rng.d6();
+    const exito = dado >= CARGA_EXITO;
 
-    /*
-      Un bando sigue vivo si le queda algo EN MESA o EN RESERVA: con todas las
-      unidades esperando a desplegar, el tablero está vacío y sin esto la
-      partida se daría por terminada en el primer fin de turno.
-    */
-    const vivos = new Set([
-      ...Object.values(this.state.units).filter((u) => u.vidas > 0).map((u) => u.owner),
-      ...this.state.reserva.map((r) => r.owner),
-    ]);
-    if (vivos.size <= 1) {
-      const ganador = [...vivos][0] ?? null;
-      this.state = { ...this.state, fase: 'FinDeTurno' };
-      return { ok: true, events: [{ type: 'PartidaTerminada', ganador }] };
-    }
-
-    // Al empezar el turno siguiente se retiran los cadáveres del anterior.
-    const nuevoTurno = this.state.turno + 1;
-    const events: GameEvent[] = [];
-    const units: Record<string, Unit> = {};
-    for (const [id, u] of Object.entries(this.state.units)) {
-      if (u.destruidaEnTurno !== null && u.destruidaEnTurno < nuevoTurno) {
-        events.push({ type: 'UnidadRetirada', unitId: id });
-        continue;
-      }
-      units[id] = u;
-    }
-
-    /*
-      Control de los puestos: se resuelve antes de pasar de turno, con las
-      unidades tal como quedaron. Los cadáveres ya no cuentan porque `ocupantes`
-      solo mira unidades vivas.
-    */
-    const puestos = this.state.puestos.map((puesto) => {
-      const duenio = controlTrasTurno({ ...this.state, units }, puesto);
-      if (duenio === puesto.duenio) return puesto;
-      events.push({
-        type: 'PuestoConquistado',
-        puestoId: puesto.id,
-        jugador: duenio,
-        anterior: puesto.duenio,
+    if (exito) {
+      this.parchear(unidadId, {
+        minis: u.minis.map((m) => ({ ...m, posicion: llegada[m.id]! })),
+        seMovio: true,
+        cargo: true,
       });
-      return { ...puesto, duenio };
+      events.push({ type: 'CargaResuelta', unidadId, objetivoId, dado, exito, desde, hasta: llegada });
+      // Queda trabada con el objetivo y con cualquier otra unidad enemiga que toque.
+      const tocadas = this.enContacto(this.unidad(unidadId)!);
+      if (!tocadas.includes(objetivoId)) tocadas.push(objetivoId);
+      for (const id of tocadas) events.push(...this.trabar(unidadId, id));
+      this.parchear(unidadId, { ataqueGratuitoContra: objetivoId });
+      events.push({ type: 'AtaqueGratuitoPendiente', unidadId, objetivoId });
+      return ok(events);
+    }
+
+    // La carga se frena: el ancla se queda a 1" del objetivo, sin trabar.
+    const rA = this.tipo(anclaDe(u).tipoId).radioPeana;
+    const rC = this.tipo(contra.tipoId).radioPeana;
+    const dir = normalize(sub(sitio, contra.posicion));
+    const freno = add(contra.posicion, scale(dir, rC + rA + DISTANCIA_ENEMIGO + 0.01));
+    const atras = formar(piezas, freno, restriccionesPara(this.state, u.owner, u.id, DISTANCIA_ENEMIGO), alcance);
+    const hasta = atras ?? desde;
+    this.parchear(unidadId, { minis: u.minis.map((m) => ({ ...m, posicion: hasta[m.id]! })), seMovio: true });
+    events.push({ type: 'CargaResuelta', unidadId, objetivoId, dado, exito, desde, hasta });
+    events.push(...this.cerrarActivacion(unidadId));
+    return ok(events);
+  }
+
+  /** Unidades enemigas en contacto de peana con esta. */
+  private enContacto(u: Unidad): string[] {
+    const out: string[] = [];
+    for (const o of Object.values(this.state.unidades)) {
+      if (o.owner === u.owner) continue;
+      const toca = u.minis.some((m) =>
+        o.minis.some(
+          (x) =>
+            baseDistance(m.posicion, this.tipo(m.tipoId).radioPeana, x.posicion, this.tipo(x.tipoId).radioPeana) <= 0.01,
+        ),
+      );
+      if (toca) out.push(o.id);
+    }
+    return out;
+  }
+
+  private trabar(a: string, b: string): GameEvent[] {
+    const ua = this.unidad(a);
+    const ub = this.unidad(b);
+    if (!ua || !ub || ua.trabadaCon.includes(b)) return [];
+    this.parchear(a, { trabadaCon: [...ua.trabadaCon, b] });
+    this.parchear(b, { trabadaCon: [...ub.trabadaCon, a] });
+    return [{ type: 'UnidadesTrabadas', a, b }];
+  }
+
+  /** Por qué no puede atacar en CaC a esa unidad. `null` si puede. */
+  motivoCaC(unidadId: string, objetivoId: string): string | null {
+    const u = this.unidad(unidadId);
+    if (!u) return 'la unidad no existe';
+    if (this.state.unidadActiva !== unidadId) return 'la unidad no está activada';
+    if (u.ataqueGratuitoContra === objetivoId) return null;
+    const m = this.motivoAccion(unidadId, 'AtacarCaC');
+    if (m) return m;
+    if (!u.trabadaCon.includes(objetivoId)) return 'solo se ataca a quien está trabado contigo';
+    return null;
+  }
+
+  /** Situaciones de cada grupo atacando en CaC: todas las miniaturas participan. */
+  situacionesCaC(u: Unidad, o: Unidad, gratuito: boolean): { grupo: Grupo; situacion: Situacion }[] {
+    const defensor = tipoDe(this.state, o);
+    const cobertura = unidadEnCobertura(this.state, u.minis, o);
+    return this.grupos(u, 'cac').map((g) => ({
+      grupo: g,
+      situacion: {
+        ...this.base(g, o),
+        enCobertura: cobertura,
+        objetivoBerserker: defensor.habilidad === 'Berserker',
+        cargaBrutal: gratuito && g.tipo.habilidad === 'Carga brutal',
+      },
+    }));
+  }
+
+  private cuerpoACuerpo(unidadId: string, objetivoId: string): CommandResult {
+    const motivo = this.motivoCaC(unidadId, objetivoId);
+    if (motivo) return fail(motivo);
+    const u = this.unidad(unidadId)!;
+    const o = this.unidad(objetivoId);
+    if (!o) return fail('El objetivo ya no está');
+    const gratuito = u.ataqueGratuitoContra === objetivoId;
+
+    const events: GameEvent[] = [];
+    if (gratuito) this.parchear(unidadId, { ataqueGratuitoContra: null });
+    else events.push(this.gastar(unidadId, 'AtacarCaC'));
+
+    for (const { grupo, situacion } of this.situacionesCaC(u, o, gratuito)) {
+      if (!this.unidad(objetivoId)) break;
+      const tirada = resolverAtaque(this.rng, parametrosAtaque(situacion));
+      events.push({
+        type: 'AtaqueResuelto',
+        atacanteId: unidadId,
+        objetivoId,
+        arma: 'cac',
+        parte: grupo.parte,
+        minis: grupo.minis.length,
+        enCobertura: situacion.enCobertura,
+        gratuito,
+        tirada,
+      });
+      events.push(...this.danar(objetivoId, tirada.total, unidadId, anclaDe(u).posicion));
+      if (this.state.fase === 'Terminada') break;
+    }
+    return ok(events);
+  }
+
+  private destrabarse(unidadId: string): CommandResult {
+    const motivo = this.motivoAccion(unidadId, 'Destrabarse');
+    if (motivo) return fail(motivo);
+    const u = this.unidad(unidadId)!;
+    const anclado = u.trabadaCon.some((id) => {
+      const o = this.unidad(id);
+      return o && tipoDe(this.state, o).habilidad === 'Anclado';
     });
+    if (anclado) return fail('Está trabada con una unidad con Anclado: no puede destrabarse');
 
-    /*
-      El orden de Iniciativa describe el turno que acaba, así que se borra: el
-      turno nuevo empieza por su propia tirada. Sin esto la interfaz se saltaba
-      la tirada del turno 2 y arrancaba activando con el orden viejo.
-    */
-    /*
-      Puntuación: cada puesto controlado al cerrar el turno suma. Se cuenta
-      DESPUÉS de resolver el control, así que el que acabas de conquistar ya
-      puntúa este mismo turno.
-    */
-    const puntos: Record<string, number> = { ...this.state.puntos };
-    for (const pm of puestos) {
-      if (!pm.duenio) continue;
-      puntos[pm.duenio] = (puntos[pm.duenio] ?? 0) + PUNTOS_POR_PUESTO;
+    const events: GameEvent[] = [this.gastar(unidadId, 'Destrabarse')];
+    const dado = this.rng.d6();
+    const exito = dado >= DESTRABE_EXITO;
+    events.push({ type: 'DestrabeResuelto', unidadId, dado, exito });
+    if (!exito) {
+      // Pierde todas sus acciones y la activación termina.
+      events.push(...this.cerrarActivacion(unidadId));
+      return ok(events);
     }
-    for (const jugador of this.state.jugadores) {
-      const antes = this.state.puntos[jugador] ?? 0;
-      const ahora = puntos[jugador] ?? 0;
-      if (ahora !== antes) {
-        events.push({ type: 'PuntosGanados', jugador, puntos: ahora - antes, total: ahora });
-      }
+    for (const id of u.trabadaCon) {
+      const o = this.unidad(id);
+      if (o) this.parchear(id, { trabadaCon: o.trabadaCon.filter((x) => x !== unidadId) });
+    }
+    this.parchear(unidadId, { trabadaCon: [] });
+    return ok(events);
+  }
+
+  // -------------------------------------------------------------- Previsión
+
+  /**
+   * Qué cabe esperar de un ataque antes de hacerlo. Usa las mismas situaciones
+   * que la resolución, así que la interfaz y la IA ven las cuentas de verdad.
+   *
+   * Para una carga se prevé el ataque gratuito que vendría si prende, con la
+   * cobertura que tenga el objetivo desde donde está ahora la unidad.
+   */
+  prevision(unidadId: string, objetivoId: string, modo: 'disparo' | 'cac' | 'carga'): Prevision | null {
+    const u = this.unidad(unidadId);
+    const o = this.unidad(objetivoId);
+    if (!u || !o) return null;
+    const situaciones = modo === 'disparo'
+      ? this.situacionesDisparo(u, o).map((x) => x.situacion)
+      : this.situacionesCaC(u, o, modo === 'carga' || u.ataqueGratuitoContra === objetivoId).map((x) => x.situacion);
+    if (situaciones.length === 0) return null;
+    const resistente = tipoDe(this.state, o).habilidad === 'Resistente' && !o.resistenteUsado;
+    return prever(situaciones.map(parametrosAtaque), o, anclaDe(u).posicion, resistente);
+  }
+
+  // ----------------------------------------------------------- Fin de turno
+
+  private terminarTurno(): CommandResult {
+    if (this.state.fase !== 'FinDeTurno') return fail('El turno no ha terminado');
+    const events: GameEvent[] = [];
+
+    // Control de puestos con las unidades tal como han quedado.
+    const puestos = this.state.puestos.map((p) => {
+      const duenio = controlTrasTurno(this.state, p);
+      if (duenio === p.duenio) return p;
+      events.push({ type: 'PuestoConquistado', puestoId: p.id, jugador: duenio, anterior: p.duenio });
+      return { ...p, duenio };
+    });
+    this.state = { ...this.state, puestos };
+
+    for (const j of this.state.jugadores) {
+      const n = puestos.filter((p) => p.duenio === j).length;
+      if (n > 0) events.push(this.sumarPuntos(j, n * PUNTOS_POR_PUESTO, 'puestos'));
     }
 
-    /*
-      Victorias de Guerra Total. Se comprueban con el control ya resuelto:
-        1. Tomar el Cuartel General enemigo gana en el acto.
-        2. Al agotarse los turnos acordados, gana quien más puntos lleve.
-    */
-    const conquistador = puestos.find(
-      (pm) => pm.esCuartelGeneral && pm.duenio !== null && pm.duenio !== this.duenioOriginalDelCG(pm),
-    );
-    if (conquistador) {
-      this.state = { ...this.state, units, puestos, puntos, fase: 'FinDeTurno' };
-      events.push({ type: 'PuestoConquistado', puestoId: conquistador.id, jugador: conquistador.duenio, anterior: null });
-      events.push({ type: 'PartidaTerminada', ganador: conquistador.duenio });
-      return { ok: true, events };
-    }
-    if (nuevoTurno > this.state.turnosTotales) {
-      const ganador = this.state.jugadores.reduce<PlayerId | null>((mejor, j) => {
-        if (mejor === null) return j;
-        const suyos = puntos[j] ?? 0;
-        const otros = puntos[mejor] ?? 0;
-        if (suyos > otros) return j;
-        return suyos === otros ? null : mejor;
-      }, null);
-      this.state = { ...this.state, units, puestos, puntos, fase: 'FinDeTurno' };
-      events.push({ type: 'PartidaTerminada', ganador });
-      return { ok: true, events };
+    // Tomar el Cuartel General enemigo gana en el acto.
+    const tomado = puestos.find((p) => p.esCuartelGeneral && p.duenio !== null && this.cuarteles.get(p.id) !== p.duenio);
+    if (tomado) return ok([...events, ...this.terminar(tomado.duenio, `ha tomado el Cuartel General ${tomado.id}`)]);
+
+    // Al agotar los turnos gana quien más puntos tenga.
+    if (this.state.turno >= this.state.turnosTotales) {
+      const orden = [...this.state.jugadores].sort((a, b) => (this.state.puntos[b] ?? 0) - (this.state.puntos[a] ?? 0));
+      const primero = orden[0] ?? null;
+      const empate = orden.length > 1 && (this.state.puntos[orden[0]!] ?? 0) === (this.state.puntos[orden[1]!] ?? 0);
+      return ok([...events, ...this.terminar(empate ? null : primero, 'se acabaron los turnos')]);
     }
 
-    /*
-      Ni fase de Iniciativa ni tirada nueva: la Iniciativa se tiró una sola vez
-      al empezar. Lo que se alterna es quién ABRE cada turno, y eso se consigue
-      rotando el orden.
-    */
-    const orden = [...this.state.ordenIniciativa.slice(1), ...this.state.ordenIniciativa.slice(0, 1)];
-    const unitsReiniciadas: Record<string, Unit> = {};
-    for (const [id, u] of Object.entries(units)) {
-      unitsReiniciadas[id] = {
+    const unidades: Record<string, Unidad> = {};
+    for (const [id, u] of Object.entries(this.state.unidades)) {
+      unidades[id] = {
         ...u,
-        activated: false,
+        activada: false,
         accionesRestantes: 0,
         accionesUsadas: [],
         seMovio: false,
         corrio: false,
         cargo: false,
         ataqueGratuitoContra: null,
+        resistenteUsado: false,
       };
     }
     this.state = {
       ...this.state,
-      units: unitsReiniciadas,
-      puestos,
-      puntos,
-      turno: nuevoTurno,
-      fase: 'Activaciones',
-      refuerzosUsados: {},
-      ordenIniciativa: orden,
-      jugadorActivo: orden[0] ?? null,
+      unidades,
+      turno: this.state.turno + 1,
+      fase: 'Iniciativa',
+      ordenIniciativa: [],
+      jugadorActivo: null,
       unidadActiva: null,
+      puestosUsados: [],
+      reforzados: [],
+      desplieguePasado: {},
     };
-    events.push({ type: 'TurnoIniciado', turno: nuevoTurno });
-    return { ok: true, events };
-  }
-
-  private patchUnit(id: string, patch: Partial<Unit>): void {
-    const current = this.state.units[id];
-    if (!current) return;
-    this.state = {
-      ...this.state,
-      units: { ...this.state.units, [id]: { ...current, ...patch } },
-    };
+    return ok(events);
   }
 }
+
+/** Distancia de peana a peana entre las dos miniaturas más cercanas de dos unidades. */
+export function distanciaEntre(state: GameState, a: Unidad, b: Unidad): number {
+  let d = Infinity;
+  for (const m of a.minis) {
+    const rm = state.tipos[m.tipoId]!.radioPeana;
+    for (const x of b.minis) {
+      d = Math.min(d, baseDistance(m.posicion, rm, x.posicion, state.tipos[x.tipoId]!.radioPeana));
+    }
+  }
+  return d;
+}
+
+export { centerDistance };

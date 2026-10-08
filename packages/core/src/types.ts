@@ -1,154 +1,161 @@
-import type { Vec2 } from './geometry.ts';
+import type { Rect, Vec2 } from './geometry.ts';
 import type { Cantidad } from './dados.ts';
-
-/** Tipos de unidad del reglamento. */
-export type UnitClass =
-  | 'Choque'
-  | 'Elite'
-  | 'Especialista'
-  | 'Comando'
-  | 'Asaltante'
-  | 'ArmasPesadas'
-  | 'Monstruo'
-  | 'Vehiculo'
-  | 'Artilleria'
-  | 'Heroe';
-
-/** Set de armas: reparte la potencia entre las dos armas de la unidad. */
-export type WeaponSet = 'Equilibrado' | 'Disparo' | 'Asalto';
-
-/**
- * Tabla "Fuerte contra". Atacar a una clase sobre la que se tiene ventaja
- * suma +1 al daño total final del ataque. Los Héroes no tienen ventaja.
- */
-export const CLASS_ADVANTAGE: Readonly<Record<UnitClass, readonly UnitClass[]>> = {
-  Choque: ['Especialista'],
-  Elite: ['Choque', 'Asaltante'],
-  Especialista: ['Elite', 'Vehiculo', 'ArmasPesadas'],
-  Comando: ['Heroe', 'Monstruo', 'ArmasPesadas'],
-  Asaltante: ['Artilleria'],
-  ArmasPesadas: ['Choque', 'Asaltante', 'Especialista', 'Heroe'],
-  Monstruo: ['Comando', 'Asaltante'],
-  Vehiculo: ['Choque', 'Elite', 'Comando', 'Asaltante'],
-  Artilleria: ['Choque', 'Elite', 'Especialista', 'Comando', 'Monstruo'],
-  Heroe: [],
-};
-
-export const CANNOT_HOLD_OBJECTIVES: readonly UnitClass[] = ['Monstruo', 'Vehiculo', 'Artilleria'];
-export const SKIRMISH_EXCLUDED: readonly UnitClass[] = ['Monstruo', 'Vehiculo', 'Artilleria'];
-
-/**
- * Vehículos y Monstruos no quedan bloqueados por estar trabados: pueden usar
- * sus acciones con libertad y pueden ser disparados aunque estén en combate.
- */
-export const IGNORA_TRABADO: readonly UnitClass[] = ['Vehiculo', 'Monstruo'];
-
-export type GameMode = 'Escaramuza' | 'GranBatalla';
-
-/**
- * Habilidad de arma. `x` guarda el parámetro de las paramétricas
- * (Brutal X+, Explosiva X) y `objetivo` la clase de las Anti-X.
- */
-export interface WeaponAbility {
-  readonly nombre: string;
-  readonly x?: number;
-  readonly objetivo?: UnitClass;
-}
-
-export interface RangedWeapon {
-  readonly kind: 'disparo';
-  readonly nombre: string;
-  readonly ataques: Cantidad;
-  /** Alcance en pulgadas. */
-  readonly distancia: number;
-  /** Precisión mínima en 1D6. null si el arma no usa Precisión (Directo, Errática). */
-  readonly precision: number | null;
-  readonly danio: number;
-  readonly danioCritico: number;
-  readonly habilidades: readonly WeaponAbility[];
-}
-
-export interface MeleeWeapon {
-  readonly kind: 'cuerpo_a_cuerpo';
-  readonly nombre: string;
-  readonly ataques: Cantidad;
-  readonly danio: number;
-  readonly danioCritico: number;
-  readonly habilidades: readonly WeaponAbility[];
-}
-
-export type Weapon = RangedWeapon | MeleeWeapon;
-
-/** Habilidad de unidad: depende de la clase y del set. */
-export interface UnitAbility {
-  readonly nombre: string;
-  readonly descripcion: string;
-}
-
-export interface UnitProfile {
-  readonly id: string;
-  readonly nombre: string;
-  /**
-   * Apodo de la unidad en la tabla de Notion (Miliciano, Devastador, Paladín…).
-   * Es el nombre del ROL, no el de un arma.
-   */
-  readonly rol: string | null;
-  readonly clase: UnitClass;
-  readonly set: WeaponSet | null;
-  /** Movimiento en pulgadas. 0 en Artillería, que no se mueve. */
-  readonly movimiento: number;
-  readonly vidas: number;
-  /** Salvación: resultado mínimo del D6 para bloquear un impacto. */
-  readonly salvacion: number;
-  /** Velocidad: pulgadas extra al Correr y al Cargar. */
-  readonly velocidad: number;
-  readonly escuadraMin: number;
-  readonly escuadraMax: number;
-  readonly valor: number;
-  readonly habilidad: UnitAbility | null;
-  readonly armas: readonly Weapon[];
-  /** Radio de peana en pulgadas. */
-  readonly radioPeana: number;
-}
-
-export interface Unit {
-  readonly id: string;
-  readonly profileId: string;
-  readonly owner: PlayerId;
-  readonly position: Vec2;
-  readonly vidas: number;
-  readonly activated: boolean;
-  readonly accionesRestantes: number;
-  readonly accionesUsadas: readonly ActionKind[];
-  readonly trabadaCon: readonly string[];
-  readonly seMovio: boolean;
-  readonly corrio: boolean;
-  /** Cargó en esta activación (para Carga brutal). */
-  readonly cargo: boolean;
-  /**
-   * Turno en el que fue destruida, o null si sigue en pie. El cadáver
-   * permanece en la mesa hasta el final de ese turno: hay habilidades que
-   * actúan sobre las unidades destruidas "durante este turno" (el Nigromante,
-   * por ejemplo), así que no puede desaparecer en el acto.
-   */
-  readonly destruidaEnTurno: number | null;
-  /**
-   * Objetivo del ataque cuerpo a cuerpo gratuito que concede una carga con
-   * éxito. Queda pendiente en vez de resolverse solo, para que el jugador lo
-   * lance cuando quiera; no consume acciones.
-   */
-  readonly ataqueGratuitoContra: string | null;
-}
 
 export type PlayerId = string;
 
-export type ActionKind =
-  | 'Mover'
-  | 'Disparar'
-  | 'Correr'
-  | 'Cargar'
-  | 'AtacarCaC'
-  | 'Destrabarse';
+// ------------------------------------------------------------------- Armas
+
+export type HabilidadArma =
+  | 'Fiable'
+  | 'Brutal'
+  | 'Perforante'
+  | 'Golpe crítico'
+  | 'Directo'
+  | 'Implacable'
+  | 'Explosiva'
+  | 'Disparo certero';
+
+export interface ArmaDisparo {
+  readonly kind: 'disparo';
+  readonly ataques: Cantidad;
+  /** Alcance en pulgadas. */
+  readonly distancia: number;
+  /** Umbral para impactar. `null` cuando el arma no tira Precisión (Directo). */
+  readonly precision: number | null;
+  readonly danio: number;
+  readonly danioCritico: number;
+  readonly habilidades: readonly HabilidadArma[];
+}
+
+export interface ArmaCaC {
+  readonly kind: 'cac';
+  readonly ataques: Cantidad;
+  readonly danio: number;
+  readonly danioCritico: number;
+  readonly habilidades: readonly HabilidadArma[];
+}
+
+export type Arma = ArmaDisparo | ArmaCaC;
+
+// ------------------------------------------------------------ Tipos de unidad
+
+/** Ventaja de tipo: +bonus al daño total contra ese tipo, una vez por ataque. */
+export interface Ventaja {
+  readonly tipoId: string;
+  readonly bonus: number;
+}
+
+/** Perfil de un tipo de unidad tal como lo publica el catálogo. */
+export interface TipoUnidad {
+  readonly id: string;
+  readonly nombre: string;
+  readonly descripcion: string;
+  readonly esComandante: boolean;
+  /** `null`: no puede moverse (Artillería). */
+  readonly movimiento: number | null;
+  readonly velocidad: number;
+  readonly vidas: number;
+  readonly salvacion: number;
+  /** Cuántas de este tipo puede llevar un Comandante. `null`: no forma escuadra. */
+  readonly escuadra: number | null;
+  readonly valor: number;
+  readonly habilidad: string;
+  readonly ventajas: readonly Ventaja[];
+  readonly disparo: ArmaDisparo | null;
+  readonly cac: ArmaCaC | null;
+  /** Radio de la peana en pulgadas, sacado de la tabla de peanas recomendadas. */
+  readonly radioPeana: number;
+  /** Altura aproximada en pulgadas. Solo cuenta para la cobertura. */
+  readonly altura: number;
+}
+
+// ---------------------------------------------------------------- Miniaturas
+
+/**
+ * Una miniatura sobre la mesa. Las reglas miden casi todo por miniatura
+ * —distancias, visión, control de puestos—, así que la posición vive aquí y no
+ * en la unidad.
+ */
+export interface Mini {
+  readonly id: string;
+  readonly tipoId: string;
+  readonly posicion: Vec2;
+  readonly vidas: number;
+  readonly esComandante: boolean;
+}
+
+/**
+ * La unidad es lo que se activa: una miniatura sola o una escuadra, que es un
+ * Comandante con miniaturas de un único tipo. Solo guarda las miniaturas vivas;
+ * cuando se queda sin ninguna, deja de existir.
+ */
+export interface Unidad {
+  readonly id: string;
+  readonly owner: PlayerId;
+  readonly minis: readonly Mini[];
+  /** Ya jugó este turno. */
+  readonly activada: boolean;
+  readonly accionesRestantes: number;
+  readonly accionesUsadas: readonly ActionKind[];
+  /** Ids de las unidades enemigas con las que está en combate. */
+  readonly trabadaCon: readonly string[];
+  readonly seMovio: boolean;
+  readonly corrio: boolean;
+  readonly cargo: boolean;
+  /** Tras una carga con éxito: el ataque cuerpo a cuerpo gratuito pendiente. */
+  readonly ataqueGratuitoContra: string | null;
+  /** Resistente: ya ha reducido daño este turno. */
+  readonly resistenteUsado: boolean;
+}
+
+/** Lo que espera en Reserva: un Comandante con su escuadra, o una miniatura suelta. */
+export interface EnReserva {
+  readonly id: string;
+  readonly owner: PlayerId;
+  readonly minis: readonly { readonly tipoId: string; readonly esComandante: boolean }[];
+}
+
+// --------------------------------------------------------------- Escenografía
+
+/**
+ * Qué hace un elemento de escenografía. Las tres propiedades del reglamento
+ * (dejar pasar, dejar ver, dar cobertura) solo se dan en estas combinaciones.
+ *
+ *  - `bloqueo`:    muro, edificio. Ni se atraviesa ni se ve a través.
+ *  - `obstaculo`:  agua, zanja. No se atraviesa, pero no estorba al disparo.
+ *  - `cobertura`:  murete, seto. Se atraviesa y se dispara a través; cubre a
+ *                  quien esté pegado si la trayectoria del tiro lo cruza.
+ */
+export type TipoTerreno = 'bloqueo' | 'obstaculo' | 'cobertura';
+
+export interface Terrain {
+  readonly id: string;
+  readonly rect: Rect;
+  /** En pulgadas. Para cubrir debe superar la mitad de la miniatura. */
+  readonly altura: number;
+  readonly tipo: TipoTerreno;
+}
+
+export const bloqueaVision = (t: Terrain): boolean => t.tipo === 'bloqueo';
+export const bloqueaPaso = (t: Terrain): boolean => t.tipo !== 'cobertura';
+export const esCobertura = (t: Terrain): boolean => t.tipo === 'cobertura';
+
+/**
+ * Puesto de mando. Es a la vez objetivo a conquistar y el único sitio desde el
+ * que se despliega. El Cuartel General es un puesto más, pero cada jugador
+ * tiene el suyo y tomar el del rival gana la partida.
+ */
+export interface Puesto {
+  readonly id: string;
+  readonly centro: Vec2;
+  readonly radio: number;
+  readonly esCuartelGeneral: boolean;
+  readonly duenio: PlayerId | null;
+}
+
+// --------------------------------------------------------------------- Turno
+
+export type ActionKind = 'Mover' | 'Correr' | 'Disparar' | 'Cargar' | 'AtacarCaC' | 'Destrabarse';
 
 export const ACTION_COST: Readonly<Record<ActionKind, number>> = {
   Mover: 1,
@@ -160,127 +167,112 @@ export const ACTION_COST: Readonly<Record<ActionKind, number>> = {
 };
 
 /**
- * Qué hace un elemento de escenografía. Las tres propiedades del reglamento
- * (dejar pasar, dejar ver, dar cobertura) no son independientes: solo se dan
- * en estas tres combinaciones, así que se modelan como un tipo y no como
- * flags sueltos que permitirían estados imposibles.
+ * Cada turno: se tira la iniciativa, se despliega, y se alternan activaciones.
  *
- *  - `bloqueo`:    muro, edificio. Ni se atraviesa ni se ve a través. Pegarse
- *                  a él no da cobertura: al otro lado nadie te ve, y desde el
- *                  lado en que sí te ven no hay nada que te tape.
- *  - `obstaculo`:  agua, zanja, lava. No se puede atravesar al mover, pero no
- *                  estorba al disparo y nunca da cobertura.
- *  - `cobertura`:  murete, seto, ruinas bajas. Se atraviesa y se dispara a
- *                  través; da cobertura a quien esté pegado si la trayectoria
- *                  del tiro la cruza.
+ * - `Iniciativa`: falta la tirada del turno.
+ * - `Despliegue`: por orden de iniciativa, cada jugador saca una unidad por
+ *   puesto que controle y refuerza a sus Comandantes.
+ * - `Activaciones`: el grueso del turno.
+ * - `FinDeTurno`: momentáneo; se cuentan puestos y puntos.
+ * - `Terminada`: alguien ha ganado.
  */
-/**
- * Puntos que aporta cada puesto de mando controlado al final del turno. Es lo
- * que convierte la mesa en una partida: sin esto solo se gana aniquilando.
- */
-export const PUNTOS_POR_PUESTO = 5;
-
-/**
- * Zona de control, en pulgadas. Se aplica al CORRER y al entrar de refuerzo: no
- * se puede terminar a esta distancia o menos de un ENEMIGO.
- *
- * Moviendo NO se aplica: el reglamento solo prohíbe acabar en contacto físico,
- * y acercarse a 1" o menos es legal —es justo lo que prepara un ataque suelto—.
- * Con las unidades propias no hay separación mínima, solo no solaparse.
- */
-export const ZONA_CONTROL = 1;
-
-export type TipoTerreno = 'bloqueo' | 'obstaculo' | 'cobertura';
-
-export interface Terrain {
-  readonly id: string;
-  readonly rect: import('./geometry.ts').Rect;
-  /** En pulgadas. Solo cuenta para la cobertura: debe superar media miniatura. */
-  readonly altura: number;
-  readonly tipo: TipoTerreno;
-}
-
-/** Corta la línea de visión y, por tanto, el disparo. */
-export function bloqueaVision(t: Terrain): boolean {
-  return t.tipo === 'bloqueo';
-}
-
-/** No se puede atravesar ni terminar el movimiento dentro. */
-export function bloqueaPaso(t: Terrain): boolean {
-  return t.tipo !== 'cobertura';
-}
-
-/** Candidato a dar cobertura; que la dé o no depende ya de la trayectoria. */
-export function esCobertura(t: Terrain): boolean {
-  return t.tipo === 'cobertura';
-}
-
-/**
- * Puesto de mando: posición estratégica del campo de batalla. Son a la vez
- * objetivos a conquistar y los ÚNICOS puntos desde los que se despliega.
- * El Cuartel General es un puesto normal a efectos de control y despliegue,
- * salvo que cada jugador tiene obligatoriamente el suyo.
- */
-export interface Puesto {
-  readonly id: string;
-  readonly centro: import('./geometry.ts').Vec2;
-  /** Radio del token, en pulgadas. */
-  readonly radio: number;
-  readonly esCuartelGeneral: boolean;
-  /** Quién lo controla ahora mismo; `null` si no lo controla nadie. */
-  readonly duenio: PlayerId | null;
-}
-
-/** Unidad que todavía no ha entrado al campo de batalla. */
-export interface EnReserva {
-  readonly id: string;
-  readonly profileId: string;
-  readonly owner: PlayerId;
-}
-
-/**
- * El turno ya no tiene fases internas: los jugadores alternan activaciones y se
- * acabó. Lo único aparte es el despliegue inicial, antes del primer turno.
- *
- * - `Despliegue`: al empezar la partida, ambos alternan sacando unidades de
- *   Reserva hasta que los dos pasan. El Héroe sale primero.
- * - `Activaciones`: el turno entero. En tu vez activas una unidad O metes un
- *   refuerzo, que consume la vez igual que una activación.
- * - `FinDeTurno`: estado momentáneo entre turnos.
- */
-export type Phase = 'Despliegue' | 'Activaciones' | 'FinDeTurno';
+export type Phase = 'Iniciativa' | 'Despliegue' | 'Activaciones' | 'FinDeTurno' | 'Terminada';
 
 export interface GameState {
-  readonly mode: GameMode;
   readonly turno: number;
+  readonly turnosTotales: number;
   readonly fase: Phase;
   readonly jugadores: readonly PlayerId[];
   readonly ordenIniciativa: readonly PlayerId[];
   readonly jugadorActivo: PlayerId | null;
   readonly unidadActiva: string | null;
-  readonly units: Readonly<Record<string, Unit>>;
-  readonly profiles: Readonly<Record<string, UnitProfile>>;
-  readonly terrain: readonly Terrain[];
+  readonly unidades: Readonly<Record<string, Unidad>>;
+  readonly tipos: Readonly<Record<string, TipoUnidad>>;
+  readonly terreno: readonly Terrain[];
   readonly puestos: readonly Puesto[];
-  /*
-    La reserva vive aparte de `units` a propósito: así todas las reglas que
-    recorren el campo de batalla —visión, objetivos, control, fin de turno—
-    siguen valiendo sin filtrar por "¿está desplegada?" en cada sitio.
-  */
   readonly reserva: readonly EnReserva[];
-  /** Puntos de victoria por jugador. */
   readonly puntos: Readonly<Record<PlayerId, number>>;
-  /**
-   * Cuántos refuerzos ha metido cada jugador este turno. El tope son tantos
-   * como puestos de mando controle: cuantos más domines, más rápido te llegan.
-   */
-  readonly refuerzosUsados: Readonly<Record<PlayerId, number>>;
-  /**
-   * Quién ha dicho ya que no despliega más en el despliegue inicial. Cuando lo
-   * dicen todos, empieza el primer turno.
-   */
+  /** Puestos por los que ya ha entrado una unidad este turno: uno por puesto. */
+  readonly puestosUsados: readonly string[];
+  /** Comandantes que ya han recibido su refuerzo este turno. */
+  readonly reforzados: readonly string[];
+  /** Quién ha dicho ya que no despliega más este turno. */
   readonly desplieguePasado: Readonly<Record<PlayerId, boolean>>;
-  /** Turnos acordados antes de empezar. Al agotarse gana quien más puntos tenga. */
-  readonly turnosTotales: number;
+  readonly ganador: PlayerId | null;
+  /** Tamaño de la mesa en pulgadas. */
+  readonly mesa: { readonly ancho: number; readonly alto: number };
   readonly rngState: number;
 }
+
+// ---------------------------------------------------------------- Constantes
+
+/** Puntos por cada puesto controlado al final de cada turno. */
+export const PUNTOS_POR_PUESTO = 5;
+
+/** Fuera de una carga, nadie puede acabar a menos de esto de un enemigo. */
+export const DISTANCIA_ENEMIGO = 1;
+
+/** Coherencia: cada miniatura de una escuadra a esto o menos de otra. */
+export const COHERENCIA = 1;
+
+// ------------------------------------------------------- Reglas por tipo
+
+/** No aportan Valor al control de puestos: los ocupan pero no los conquistan. */
+const SIN_VALOR_EN_PUESTOS = new Set(['vehiculo-ligero', 'vehiculo-pesado', 'monstruo', 'artilleria', 'titan']);
+/** Demasiado grandes para que nada los tape. */
+const SIN_COBERTURA = new Set(['vehiculo-ligero', 'vehiculo-pesado', 'monstruo', 'titan']);
+/** Se les puede disparar aunque estén trabados. */
+const DISPARABLES_TRABADOS = new Set(['vehiculo-ligero', 'vehiculo-pesado', 'monstruo']);
+
+export const aportaValorEnPuestos = (t: TipoUnidad): boolean => !SIN_VALOR_EN_PUESTOS.has(t.id);
+export const puedeTenerCobertura = (t: TipoUnidad): boolean => !SIN_COBERTURA.has(t.id);
+export const disparableTrabado = (t: TipoUnidad): boolean => DISPARABLES_TRABADOS.has(t.id);
+
+// ------------------------------------------------------- Consultas de unidad
+
+/** El Comandante, o la única miniatura si va sola. Desde ella se mueve todo. */
+export function anclaDe(u: Unidad): Mini {
+  return u.minis.find((m) => m.esComandante) ?? u.minis[0]!;
+}
+
+export const comandanteDe = (u: Unidad): Mini | undefined => u.minis.find((m) => m.esComandante);
+
+/** Las miniaturas que no son el Comandante: la escuadra propiamente dicha. */
+export const tropaDe = (u: Unidad): Mini[] => u.minis.filter((m) => !m.esComandante);
+
+/**
+ * El tipo de la unidad a efectos de reglas: el de su tropa si la tiene, o el
+ * de la miniatura suelta. Un Comandante solo es de tipo Comandante, y contra él
+ * no hay ventaja de tipo.
+ */
+export function tipoDe(state: GameState, u: Unidad): TipoUnidad {
+  const tropa = tropaDe(u)[0];
+  return state.tipos[(tropa ?? anclaDe(u)).tipoId]!;
+}
+
+/**
+ * Movimiento y Velocidad con los que se mueve la unidad. Un Comandante que
+ * lidera una escuadra usa los del tipo que comanda; si se queda solo, los suyos.
+ */
+export function movimientoDe(state: GameState, u: Unidad): { movimiento: number | null; velocidad: number } {
+  const t = tipoDe(state, u);
+  return { movimiento: t.movimiento, velocidad: t.velocidad };
+}
+
+/** Valor total que aporta la unidad viva: el de cada miniatura que sigue en pie. */
+export function valorDe(state: GameState, u: Unidad): number {
+  return u.minis.reduce((s, m) => s + (state.tipos[m.tipoId]?.valor ?? 0), 0);
+}
+
+/** Vidas totales y máximas, sumando todas las miniaturas. */
+export function vidasDe(state: GameState, u: Unidad): { actuales: number; maximas: number } {
+  let actuales = 0;
+  let maximas = 0;
+  for (const m of u.minis) {
+    actuales += m.vidas;
+    maximas += state.tipos[m.tipoId]?.vidas ?? 0;
+  }
+  return { actuales, maximas };
+}
+
+export type { Vec2, Rect };

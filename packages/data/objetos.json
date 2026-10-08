@@ -1,0 +1,123 @@
+{
+  "objetos": [
+    {
+      "id": "botiquin",
+      "nombre": "Botiquín",
+      "descripcion": "La unidad recupera 3 Vidas perdidas.",
+      "accion": "2",
+      "valor": 2
+    },
+    {
+      "id": "teletransporte",
+      "nombre": "Teletransporte",
+      "descripcion": "La unidad se teletransporta a un puesto de mando aliado a elección del jugador, colocada en contacto con él.",
+      "accion": "2",
+      "valor": 4
+    },
+    {
+      "id": "transmision",
+      "nombre": "Transmisión",
+      "descripcion": "La unidad intercambia su posición con otra unidad aliada que no esté trabada.",
+      "accion": "2",
+      "valor": 3
+    },
+    {
+      "id": "estimulante",
+      "nombre": "Estimulante",
+      "descripcion": "Activa de nuevo una unidad que previamente se activó.",
+      "accion": "No gasta acción",
+      "valor": 5
+    },
+    {
+      "id": "carga-ciega",
+      "nombre": "Carga ciega",
+      "descripcion": "La carga tiene éxito sin tirar el chequeo, pero el ataque gratuito falla con resultados de 1, 2 o 3.",
+      "accion": "2",
+      "valor": 2
+    },
+    {
+      "id": "super-disparo",
+      "nombre": "Super disparo",
+      "descripcion": "La unidad suma +1D3 al número de ataques a distancia en ese ataque.",
+      "accion": "2",
+      "valor": 4
+    },
+    {
+      "id": "super-golpe",
+      "nombre": "Super golpe",
+      "descripcion": "La unidad suma +1D3 dados al número de ataques cuerpo a cuerpo en ese ataque.",
+      "accion": "No gasta acción",
+      "valor": 5
+    },
+    {
+      "id": "sin-presion",
+      "nombre": "Sin presión",
+      "descripcion": "La unidad se destraba automáticamente, sin tirar el chequeo ni gastar acción. Puede destrabarse incluso de una unidad con Anclado.",
+      "accion": "No gasta acción",
+      "valor": 2
+    },
+    {
+      "id": "cambio-de-objetivo",
+      "nombre": "Cambio de objetivo",
+      "descripcion": "Una unidad trabada, en lugar de atacar cuerpo a cuerpo, puede Disparar a otra unidad enemiga a su alcance que no sea con la que está trabada.",
+      "accion": "2",
+      "valor": 3
+    },
+    {
+      "id": "reroll",
+      "nombre": "Reroll",
+      "descripcion": "Repite todos los dados de una tirada propia; el resultado anterior se descarta.",
+      "accion": "No gasta acción",
+      "valor": 3
+    },
+    {
+      "id": "refuerzos",
+      "nombre": "Refuerzos",
+      "descripcion": "Un Comandante puede recibir una miniatura adicional para su escuadra.",
+      "accion": "2",
+      "valor": 3
+    },
+    {
+      "id": "vuelta-a-la-reserva",
+      "nombre": "Vuelta a la Reserva",
+      "descripcion": "El Comandante devuelve una unidad a la Reserva; si está dañada, recupera todas sus Vidas.",
+      "accion": "2",
+      "valor": 4
+    },
+    {
+      "id": "balas-directas",
+      "nombre": "Balas directas",
+      "descripcion": "Da la habilidad Directo al arma a distancia en el ataque.",
+      "accion": "No gasta acción",
+      "valor": 4
+    },
+    {
+      "id": "anti",
+      "nombre": "Anti",
+      "descripcion": "Suma 1D3 de daño al daño total final del ataque contra las unidades sobre las que tenga ventaja.",
+      "accion": "No gasta acción",
+      "valor": 4
+    },
+    {
+      "id": "pistola-oculta",
+      "nombre": "Pistola oculta",
+      "descripcion": "Puede usar su arma a distancia estando trabada en combate cuerpo a cuerpo, para atacar a la unidad con la que combate.",
+      "accion": "2",
+      "valor": 3
+    },
+    {
+      "id": "habilidad-en-armas",
+      "nombre": "Habilidad en armas",
+      "descripcion": "Ganas la habilidad de arma Golpe crítico en tu ataque.",
+      "accion": "No gasta acción",
+      "valor": 4
+    },
+    {
+      "id": "botas-ligeras",
+      "nombre": "Botas ligeras",
+      "descripcion": "Da +3\" de Velocidad.",
+      "accion": "No gasta acción",
+      "valor": 3
+    }
+  ]
+}

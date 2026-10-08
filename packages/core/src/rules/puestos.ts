@@ -1,150 +1,84 @@
-import { areaSolapeCirculos, baseDistance, centerDistance } from '../geometry.ts';
-import type { GameState, PlayerId, Puesto, Unit, UnitProfile } from '../types.ts';
+import { areaSolapeCirculos, centerDistance, type Vec2 } from '../geometry.ts';
+import {
+  aportaValorEnPuestos,
+  type GameState,
+  type Mini,
+  type PlayerId,
+  type Puesto,
+} from '../types.ts';
 
 /**
- * Reglas de los puestos de mando: quién los ocupa, quién los controla y desde
- * dónde se puede desplegar.
+ * Puestos de mando: quién los ocupa, quién los controla y desde dónde se
+ * despliega. En escuadras, cada miniatura se comprueba por separado.
  */
 
-/** Clases que ocupan un puesto pero nunca lo conquistan ni lo defienden. */
-const SIN_VALOR = new Set(['Vehiculo', 'Monstruo', 'Artilleria']);
-
-/**
- * ¿La miniatura está DENTRO del puesto? El reglamento pide que la mitad o más
- * de la peana esté encima, así que se compara el área de solape con media
- * peana — no basta con que el centro caiga dentro.
- */
-export function unidadOcupa(puesto: Puesto, unit: Unit, perfil: UnitProfile): boolean {
-  if (unit.vidas <= 0) return false;
-  const peana = Math.PI * perfil.radioPeana ** 2;
-  return areaSolapeCirculos(unit.position, perfil.radioPeana, puesto.centro, puesto.radio)
-    >= peana / 2 - 1e-9;
+/** ¿La miniatura está dentro? El reglamento pide media peana o más encima. */
+export function miniOcupa(state: GameState, puesto: Puesto, m: Mini): boolean {
+  const t = state.tipos[m.tipoId];
+  if (!t || m.vidas <= 0) return false;
+  const peana = Math.PI * t.radioPeana ** 2;
+  return areaSolapeCirculos(m.posicion, t.radioPeana, puesto.centro, puesto.radio) >= peana / 2 - 1e-9;
 }
 
 /**
- * A qué distancia del centro del puesto puede estar el centro de la peana y
- * seguir ocupándolo. Sale de la misma regla de "media peana o más": se resuelve
- * por tanteo porque el área de la lente no se despeja a mano.
- *
- * Para un puesto de 3" y una peana de 25 mm da 1,45" — o sea, prácticamente
- * que el centro caiga dentro del token.
- */
-export function distanciaMaximaParaOcupar(puesto: Puesto, radioPeana: number): number {
-  const media = (Math.PI * radioPeana ** 2) / 2;
-  let dentro = 0;
-  let fuera = puesto.radio + radioPeana;
-  for (let i = 0; i < 40; i += 1) {
-    const medio = (dentro + fuera) / 2;
-    const solape = areaSolapeCirculos(
-      { x: puesto.centro.x + medio, y: puesto.centro.y }, radioPeana, puesto.centro, puesto.radio,
-    );
-    if (solape >= media) dentro = medio;
-    else fuera = medio;
-  }
-  return dentro;
-}
-
-/** Unidades de un jugador que ocupan el puesto, vivas y sobre la mesa. */
-export function ocupantes(state: GameState, puesto: Puesto, owner?: PlayerId): Unit[] {
-  return Object.values(state.units).filter((u) => {
-    if (owner !== undefined && u.owner !== owner) return false;
-    const perfil = state.profiles[u.profileId];
-    return !!perfil && unidadOcupa(puesto, u, perfil);
-  });
-}
-
-/**
- * Valor total que un jugador aporta al puesto. No suman los Vehículos,
- * Monstruos ni Artillería, ni las unidades trabadas en cuerpo a cuerpo —
- * estas últimas se tratan como si no estuvieran hasta resolver el combate.
+ * Valor que un jugador tiene en el puesto. No suman los tipos que ocupan sin
+ * conquistar (Vehículos, Monstruos, Artillería, Titanes) ni las unidades
+ * trabadas en cuerpo a cuerpo, que cuentan como si no estuvieran.
  */
 export function valorEnPuesto(state: GameState, puesto: Puesto, owner: PlayerId): number {
   let total = 0;
-  for (const u of ocupantes(state, puesto, owner)) {
-    if (u.trabadaCon.length > 0) continue;
-    const perfil = state.profiles[u.profileId]!;
-    if (SIN_VALOR.has(perfil.clase)) continue;
-    total += perfil.valor;
+  for (const u of Object.values(state.unidades)) {
+    if (u.owner !== owner || u.trabadaCon.length > 0) continue;
+    for (const m of u.minis) {
+      const t = state.tipos[m.tipoId];
+      if (!t || !aportaValorEnPuestos(t)) continue;
+      if (miniOcupa(state, puesto, m)) total += t.valor;
+    }
   }
   return total;
 }
 
+/** ¿Hay alguna miniatura de ese jugador en el puesto? */
+export function hayMinisDe(state: GameState, puesto: Puesto, owner: PlayerId): boolean {
+  return Object.values(state.unidades).some(
+    (u) => u.owner === owner && u.minis.some((m) => miniOcupa(state, puesto, m)),
+  );
+}
+
 /**
- * Quién controla el puesto tras este turno. En empate —incluido el 0 a 0 de un
- * puesto vacío— se queda quien ya lo tuviera.
+ * Quién controla el puesto al final del turno: quien más Valor sume en él. Si
+ * empatan, o no suma nadie, sigue como estaba.
  */
 export function controlTrasTurno(state: GameState, puesto: Puesto): PlayerId | null {
-  let mejor: PlayerId | null = puesto.duenio;
-  let mejorValor = -1;
-  let empatado = false;
-
-  for (const jugador of state.jugadores) {
-    const valor = valorEnPuesto(state, puesto, jugador);
-    if (valor === 0) continue;
-    if (valor > mejorValor) {
-      mejor = jugador;
-      mejorValor = valor;
-      empatado = false;
-    } else if (valor === mejorValor) {
-      empatado = true;
+  let mejor: PlayerId | null = null;
+  let mejorValor = 0;
+  let empate = false;
+  for (const j of state.jugadores) {
+    const v = valorEnPuesto(state, puesto, j);
+    if (v > mejorValor) {
+      mejor = j;
+      mejorValor = v;
+      empate = false;
+    } else if (v === mejorValor && v > 0) {
+      empate = true;
     }
   }
-
-  if (mejorValor < 0) return puesto.duenio; // nadie aporta valor
-  return empatado ? puesto.duenio : mejor;
+  if (mejor === null || empate) return puesto.duenio;
+  return mejor;
 }
 
-/**
- * ¿Puede este jugador meter refuerzos por este puesto? Tiene que controlarlo y
- * no puede haber enemigos ocupándolo, aunque siga siendo suyo por Valor.
- */
+/** ¿Puede este jugador desplegar por este puesto ahora mismo? */
 export function puedeDesplegarEn(state: GameState, puesto: Puesto, owner: PlayerId): boolean {
   if (puesto.duenio !== owner) return false;
-  return !ocupantes(state, puesto).some((u) => u.owner !== owner);
+  if (state.puestosUsados.includes(puesto.id)) return false;
+  // Ocupado por el enemigo: aunque sea tuyo, por ahí no entra nadie.
+  return !state.jugadores.some((j) => j !== owner && hayMinisDe(state, puesto, j));
 }
 
 /**
- * ¿Vale esta posición para desplegar? La peana tiene que caber ENTERA dentro
- * del puesto, sin sobresalir. Así la unidad lo ocupa desde el primer momento
- * —la mitad o más de la peana encima— y no entra a la mesa regalando el punto.
+ * ¿El ancla de un despliegue cae bien? "En contacto con él o dentro de su
+ * área": basta con que la peana toque el círculo del puesto.
  */
-export function dentroDelPuesto(
-  posicion: { x: number; y: number },
-  radioPeana: number,
-  puesto: Puesto,
-): boolean {
-  return centerDistance(posicion, puesto.centro) <= puesto.radio - radioPeana + 1e-6;
-}
-
-/**
- * Encierra una posición dentro del puesto: la jaula de despliegue. Devuelve el
- * punto más cercano al pedido que deja la peana entera dentro.
- */
-export function encerrarEnPuesto(
-  posicion: { x: number; y: number },
-  radioPeana: number,
-  puesto: Puesto,
-): { x: number; y: number } {
-  const tope = Math.max(0, puesto.radio - radioPeana);
-  const dx = posicion.x - puesto.centro.x;
-  const dy = posicion.y - puesto.centro.y;
-  const d = Math.hypot(dx, dy);
-  if (d <= tope) return { x: posicion.x, y: posicion.y };
-  if (d < 1e-9) return { x: puesto.centro.x, y: puesto.centro.y + tope };
-  return { x: puesto.centro.x + (dx / d) * tope, y: puesto.centro.y + (dy / d) * tope };
-}
-
-/** Distancia de peana a peana entre una posición y la unidad más cercana. */
-export function libreDeUnidades(
-  state: GameState,
-  posicion: { x: number; y: number },
-  radioPeana: number,
-  margen = 0,
-): boolean {
-  return Object.values(state.units).every((u) => {
-    if (u.vidas <= 0) return true;
-    const perfil = state.profiles[u.profileId];
-    if (!perfil) return true;
-    return baseDistance(posicion, radioPeana, u.position, perfil.radioPeana) > margen;
-  });
+export function tocaPuesto(puesto: Puesto, p: Vec2, radio: number): boolean {
+  return centerDistance(p, puesto.centro) <= puesto.radio + radio + 1e-9;
 }

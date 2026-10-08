@@ -1,384 +1,204 @@
+import { resolverCantidad, type Cantidad } from '../dados.ts';
 import type { Rng } from '../rng.ts';
-import { resolverCantidad } from '../dados.ts';
-import {
-  CLASS_ADVANTAGE,
-  type MeleeWeapon,
-  type RangedWeapon,
-  type UnitClass,
-  type UnitProfile,
-  type WeaponAbility,
-} from '../types.ts';
+import type { Arma, HabilidadArma, TipoUnidad } from '../types.ts';
 
 /**
- * Con las habilidades apagadas solo sobreviven las que definen cómo impacta
- * el arma. Las demás son modificadores y se ignoran.
+ * Resolución de un ataque: dados de ataque, salvaciones y daño.
+ *
+ * Todo pasa en dos pasos. `parametrosAtaque` traduce la situación (arma,
+ * cobertura, habilidades, ventaja) a números; `resolverAtaque` tira los dados
+ * con esos números. La previsión usa los MISMOS parámetros para calcular
+ * probabilidades, así que lo que promete la previsión es lo que luego se tira.
  */
-const ESTRUCTURALES = ['Directo', 'Errática'];
-const SIN_MODIFICADORES = (ab: readonly WeaponAbility[]): readonly WeaponAbility[] =>
-  ab.filter((a) => ESTRUCTURALES.includes(a.nombre));
 
-/** Crítico por defecto: un 6 natural. Brutal X+ lo rebaja. */
-const CRIT_BASE = 6;
-/** En cuerpo a cuerpo no hay Precisión: 1 y 2 fallan, 3+ impacta. */
-const MELEE_HIT = 3;
-/** Con el objetivo en cobertura, el atacante en CaC falla también con 3. */
-const MELEE_HIT_COVER = 4;
+/** En cuerpo a cuerpo fallan el 1 y el 2. */
+const CAC_IMPACTA = 3;
+/** Con el objetivo en cobertura o Berserker, falla también el 3. */
+const CAC_IMPACTA_DIFICIL = 4;
+const CRITICO = 6;
+const CRITICO_BRUTAL = 5;
 
-export const hasAbility = (ab: readonly WeaponAbility[], nombre: string): boolean =>
-  ab.some((a) => a.nombre === nombre);
+/** Ningún umbral pasa de 6+, y el 1 siempre falla. */
+const acotar = (v: number): number => Math.min(6, Math.max(2, v));
 
-export const getAbility = (
-  ab: readonly WeaponAbility[],
-  nombre: string,
-): WeaponAbility | undefined => ab.find((a) => a.nombre === nombre);
+export const tiene = (arma: Arma, h: HabilidadArma): boolean => arma.habilidades.includes(h);
 
-export const hasClassAdvantage = (atacante: UnitClass, objetivo: UnitClass): boolean =>
-  CLASS_ADVANTAGE[atacante].includes(objetivo);
-
-/**
- * Efectos que vienen de fuera del arma (habilidades de unidad, equipamiento).
- * El motor los calcula y los pasa aquí para que la resolución siga siendo una
- * función pura del arma, los perfiles y este contexto.
- */
-export interface AttackContext {
-  /**
-   * Aplicar las habilidades de arma que modifican la resolución (Brutal,
-   * Perforante, Anti-X, Inestable, Explosiva). Por defecto sí. Directo y
-   * Errática quedan siempre fuera del interruptor: no son modificadores, son
-   * la forma en que esas armas impactan, y sin ellas no funcionarían.
-   */
-  readonly habilidadesArma?: boolean | undefined;
-  /** Distancia de peana a peana en pulgadas. */
-  readonly distancia: number;
-  /** El objetivo se beneficia de cobertura. */
+/** La situación del ataque, tal como la ve el motor. */
+export interface Situacion {
+  readonly arma: Arma;
+  /** Cuántas miniaturas atacan con esta arma. */
+  readonly minis: number;
+  /** Tipo cuya Salvación se tira: la tropa del objetivo, o el Comandante si va solo. */
+  readonly defensor: TipoUnidad;
+  /** Tipo que ataca, si puede tener ventaja (el Comandante no la tiene). */
+  readonly tipoAtacante: TipoUnidad | null;
+  /** Tipo atacado a efectos de ventaja (nadie la tiene contra un Comandante). */
+  readonly tipoObjetivo: TipoUnidad | null;
   readonly enCobertura: boolean;
-  /** Dados de ataque adicionales (Emplazado, Carga brutal). */
-  readonly dadosExtra?: number;
-  /** Mejora de Precisión: resta al umbral (Certero). */
-  readonly precisionMejorada?: number;
-  /** Repetir tiradas de Precisión fallidas (Tirador, Munición certera). */
-  readonly repetirFallos?: boolean;
-  /** El defensor tiene Berserker: el atacante falla también con 3 en CaC. */
-  readonly defensorBerserker?: boolean;
+  /** Disparo certero: objetivo a la mitad del alcance o menos. */
+  readonly aMitadDeAlcance?: boolean;
+  /** Atrincherado: dispara desde detrás de una cobertura. */
+  readonly atrincherado?: boolean;
+  /** Carga brutal: ataque gratuito de una carga. */
+  readonly cargaBrutal?: boolean;
+  /** Emplazado: no se ha movido en esta activación. */
+  readonly emplazado?: boolean;
+  /** El objetivo es Berserker: en CaC se falla con 1, 2 y 3. */
+  readonly objetivoBerserker?: boolean;
 }
 
-export interface AttackResult {
-  readonly dadosAtaque: readonly number[];
-  readonly dadosRepetidos: readonly number[];
-  readonly numeroDeAtaques: number;
-  readonly impactos: number;
-  readonly criticos: number;
-  readonly dadosSalvacion: readonly number[];
-  readonly impactosBloqueados: number;
-  readonly danioBase: number;
-  readonly danioCritico: number;
-  readonly bonusAntiX: number;
-  readonly bonusVentajaClase: number;
-  readonly danioTotal: number;
-  /** Daño que se inflige el propio atacante por Inestable. */
-  readonly danioRetroceso: number;
-  /** Miniaturas adicionales que puede elegir el atacante por Explosiva X. */
-  readonly explosivaObjetivos: number;
+export interface Parametros {
+  /** Un término por miniatura atacante, más los dados sueltos que se ganen. */
+  readonly cantidades: readonly Cantidad[];
+  /** `null`: impacta todo sin superar Precisión (Directo). */
   readonly umbralImpacto: number | null;
-  readonly umbralSalvacion: number;
-  /** Salvación impresa en la ficha, antes de modificadores. */
-  readonly salvacionBase: number;
-  /** El defensor se beneficiaba de cobertura en este ataque. */
-  readonly enCobertura: boolean;
   readonly umbralCritico: number;
+  readonly implacable: boolean;
+  readonly salvacion: number;
+  /** Los críticos no se pueden salvar. */
+  readonly golpeCritico: boolean;
+  readonly danio: number;
+  readonly danioCritico: number;
+  readonly ventaja: number;
+  /** Lo que ha modificado el ataque, para enseñarlo en pantalla. */
   readonly notas: readonly string[];
 }
 
-/**
- * Tope de los umbrales de D6. El reglamento fija el máximo en 6+ tanto para
- * Salvación como para Precisión: nunca se puede necesitar más de un 6.
- */
-const capThreshold = (v: number): number => Math.min(6, Math.max(1, v));
-
-/** Anti-X: +1D3 de daño contra la clase indicada, si el ataque hizo daño. */
-function bonusAnti(
-  rng: Rng,
-  ab: readonly WeaponAbility[],
-  objetivo: UnitClass,
-  hizoDanio: boolean,
-  notas: string[],
-): number {
-  if (!hizoDanio) return 0;
-  const anti = ab.find((a) => a.nombre === 'Anti-X' && a.objetivo === objetivo);
-  if (!anti) return 0;
-  const extra = rng.d3();
-  notas.push(`Anti-${objetivo}: +${extra} de daño extra (1D3)`);
-  return extra;
-}
-
-/** Ventaja de clase: +1 al daño total final si el ataque infligió daño. */
-function bonusVentaja(
-  atacante: UnitProfile,
-  objetivo: UnitProfile,
-  hizoDanio: boolean,
-  notas: string[],
-): number {
-  if (!hizoDanio || !hasClassAdvantage(atacante.clase, objetivo.clase)) return 0;
-  notas.push(`Ventaja de clase de ${atacante.clase} sobre ${objetivo.clase}: +1 al daño total`);
-  return 1;
-}
-
-/** Inestable: 1D6 tras el ataque; con 1 o 2 el portador sufre el mismo daño. */
-function retrocesoInestable(
-  rng: Rng,
-  ab: readonly WeaponAbility[],
-  danioInfligido: number,
-  notas: string[],
-): number {
-  if (!hasAbility(ab, 'Inestable') || danioInfligido <= 0) return 0;
-  const d = rng.d6();
-  if (d > 2) {
-    notas.push(`Inestable: 1D6=${d}, sin retroceso`);
-    return 0;
-  }
-  notas.push(`Inestable: 1D6=${d}, el portador sufre los mismos ${danioInfligido} de daño`);
-  return danioInfligido;
-}
-
-/** Secuencia de ataque a distancia del reglamento. */
-export function resolveRangedAttack(
-  rng: Rng,
-  weapon: RangedWeapon,
-  attacker: UnitProfile,
-  target: UnitProfile,
-  ctx: AttackContext,
-): AttackResult {
+export function parametrosAtaque(s: Situacion): Parametros {
+  const { arma } = s;
   const notas: string[] = [];
-  const conHabilidades = ctx.habilidadesArma ?? true;
-  const ab = conHabilidades ? weapon.habilidades : SIN_MODIFICADORES(weapon.habilidades);
+  const cantidades: Cantidad[] = Array.from({ length: s.minis }, () => arma.ataques);
 
-  // --- Paso 2: número de dados de ataque ---
-  let numeroDeAtaques = resolverCantidad(rng, weapon.ataques) + (ctx.dadosExtra ?? 0);
-  if (typeof weapon.ataques !== 'number') {
-    notas.push(`Ataques variables: se tiran ${numeroDeAtaques} dados`);
+  if (arma.kind === 'disparo' && s.aMitadDeAlcance && tiene(arma, 'Disparo certero')) {
+    cantidades.push(1);
+    notas.push('Disparo certero +1 dado');
   }
-  if (ctx.dadosExtra) notas.push(`+${ctx.dadosExtra} dado(s) de ataque por habilidad de unidad`);
+  if (s.emplazado) {
+    cantidades.push(1);
+    notas.push('Emplazado +1 dado');
+  }
+  if (arma.kind === 'cac' && s.cargaBrutal) {
+    cantidades.push(1);
+    notas.push('Carga brutal +1 dado');
+  }
 
-  // --- Precisión ---
-  const directo = hasAbility(ab, 'Directo');
-  let umbralImpacto: number | null = weapon.precision;
-
-  if (directo) {
-    umbralImpacto = null;
-    notas.push('Directo: impacta sin tirada de Precisión');
-  } else if (hasAbility(ab, 'Errática')) {
-    const d = rng.d6();
-    umbralImpacto = capThreshold(d);
-    notas.push(`Errática: la Precisión de este ataque es ${umbralImpacto}+ (1D6=${d})`);
-  } else if (umbralImpacto !== null) {
-    if (ctx.precisionMejorada) {
-      umbralImpacto -= ctx.precisionMejorada;
-      notas.push(`Precisión mejorada en ${ctx.precisionMejorada} por habilidad de unidad`);
+  let umbralImpacto: number | null;
+  if (arma.kind === 'disparo') {
+    if (tiene(arma, 'Directo') || arma.precision === null) {
+      umbralImpacto = null;
+      notas.push('Directo: impacta sin tirar Precisión');
+    } else {
+      let p = arma.precision;
+      if (s.atrincherado) {
+        p -= 1;
+        notas.push('Atrincherado: Precisión mejorada en 1');
+      }
+      umbralImpacto = acotar(p);
     }
-    umbralImpacto = capThreshold(umbralImpacto);
-  }
-
-  // --- Crítico: Brutal X+ lo rebaja ---
-  let umbralCritico = CRIT_BASE;
-  const brutal = getAbility(ab, 'Brutal X+');
-  if (brutal?.x !== undefined) {
-    umbralCritico = capThreshold(brutal.x);
-    notas.push(`Brutal ${umbralCritico}+: crítico con ${umbralCritico} o más`);
-  }
-
-  // --- Paso 3: tirada de precisión ---
-  let dados: number[] = [];
-  let repetidos: number[] = [];
-  let impactos = 0;
-  let criticos = 0;
-
-  if (umbralImpacto === null) {
-    // Directo: todos los dados impactan; el crítico sigue siendo posible si
-    // el arma tiene Brutal, pero sin tirada no hay resultado natural.
-    impactos = numeroDeAtaques;
   } else {
-    dados = rng.roll(numeroDeAtaques);
-    if (ctx.repetirFallos) {
-      const fallidos = dados.filter((d) => d < umbralImpacto!).length;
-      repetidos = rng.roll(fallidos);
-      notas.push(`Se repiten ${fallidos} tiradas fallidas de Precisión`);
-    }
-    const finales = [
-      ...dados.filter((d) => d >= umbralImpacto),
-      ...repetidos.filter((d) => d >= umbralImpacto),
-    ];
-    for (const d of finales) {
-      // Un 6 natural siempre impacta, y es crítico salvo regla en contra.
-      if (d >= umbralCritico) criticos++;
-      else impactos++;
-    }
+    const dificil = s.enCobertura || s.objetivoBerserker;
+    umbralImpacto = dificil ? CAC_IMPACTA_DIFICIL : CAC_IMPACTA;
+    if (s.enCobertura) notas.push('En cobertura: falla con 1, 2 y 3');
+    else if (s.objetivoBerserker) notas.push('Berserker: falla con 1, 2 y 3');
   }
 
-  // --- Paso 4: salvaciones ---
-  let umbralSalvacion = target.salvacion;
-  if (ctx.enCobertura) {
-    umbralSalvacion -= 1;
-    notas.push('Cobertura: Salvación mejorada en 1');
+  const umbralCritico = tiene(arma, 'Brutal') ? CRITICO_BRUTAL : CRITICO;
+  if (umbralCritico === CRITICO_BRUTAL) notas.push('Brutal: crítico con 5+');
+
+  let salvacion = s.defensor.salvacion;
+  if (arma.kind === 'disparo' && s.enCobertura) {
+    salvacion -= 1;
+    notas.push('Cobertura: Salvación +1');
   }
-  if (hasAbility(ab, 'Perforante')) {
-    umbralSalvacion += 1;
-    notas.push('Perforante: Salvación empeorada en 1');
+  if (tiene(arma, 'Perforante')) {
+    salvacion += 1;
+    notas.push('Perforante: Salvación −1');
   }
-  umbralSalvacion = capThreshold(umbralSalvacion);
+  salvacion = acotar(salvacion);
 
-  const dadosSalvacion = rng.roll(impactos + criticos);
-  let bloqueadosNormales = 0;
-  let bloqueadosCriticos = 0;
-  dadosSalvacion.forEach((d, i) => {
-    // Un 1 natural siempre falla la salvación.
-    if (d === 1 || d < umbralSalvacion) return;
-    if (i < impactos) bloqueadosNormales++;
-    else bloqueadosCriticos++;
-  });
+  const implacable = tiene(arma, 'Implacable');
+  if (implacable) notas.push('Implacable: repite los fallos');
+  const golpeCritico = tiene(arma, 'Golpe crítico');
+  if (golpeCritico) notas.push('Golpe crítico: los críticos no se salvan');
 
-  // --- Paso 5: daño ---
-  const danioBase = (impactos - bloqueadosNormales) * weapon.danio;
-  const danioCrit = (criticos - bloqueadosCriticos) * weapon.danioCritico;
-  const bruto = danioBase + danioCrit;
-
-  const anti = bonusAnti(rng, ab, target.clase, bruto > 0, notas);
-  const ventaja = bonusVentaja(attacker, target, bruto > 0, notas);
-  const danioTotal = bruto + anti + ventaja;
-  const retroceso = retrocesoInestable(rng, ab, danioTotal, notas);
-
-  const explosiva = getAbility(ab, 'Explosiva X');
-  const explosivaObjetivos = explosiva?.x !== undefined && danioTotal > 0 ? explosiva.x : 0;
-  if (explosivaObjetivos > 0) {
-    notas.push(`Explosiva ${explosivaObjetivos}: hasta ${explosivaObjetivos} miniatura(s) más a 3" sufren ${danioTotal}`);
+  let ventaja = 0;
+  if (s.tipoAtacante && s.tipoObjetivo) {
+    ventaja = s.tipoAtacante.ventajas.find((v) => v.tipoId === s.tipoObjetivo!.id)?.bonus ?? 0;
+    if (ventaja > 0) notas.push(`Ventaja contra ${s.tipoObjetivo.nombre} +${ventaja}`);
   }
 
   return {
-    dadosAtaque: dados,
-    dadosRepetidos: repetidos,
-    numeroDeAtaques,
-    impactos,
-    criticos,
-    dadosSalvacion,
-    impactosBloqueados: bloqueadosNormales + bloqueadosCriticos,
-    danioBase,
-    danioCritico: danioCrit,
-    bonusAntiX: anti,
-    bonusVentajaClase: ventaja,
-    danioTotal,
-    danioRetroceso: retroceso,
-    explosivaObjetivos,
+    cantidades,
     umbralImpacto,
-    umbralSalvacion,
-    salvacionBase: target.salvacion,
-    enCobertura: ctx.enCobertura,
     umbralCritico,
+    implacable,
+    salvacion,
+    golpeCritico,
+    danio: arma.danio,
+    danioCritico: arma.danioCritico,
+    ventaja,
     notas,
   };
 }
 
-/** Resolución de cuerpo a cuerpo: 1 y 2 fallan, 6 es crítico. */
-export function resolveMeleeAttack(
-  rng: Rng,
-  weapon: MeleeWeapon,
-  attacker: UnitProfile,
-  target: UnitProfile,
-  ctx: AttackContext,
-): AttackResult {
-  const notas: string[] = [];
-  const conHabilidades = ctx.habilidadesArma ?? true;
-  const ab = conHabilidades ? weapon.habilidades : SIN_MODIFICADORES(weapon.habilidades);
+/** Todo lo que pasó en una tirada, para poder animarla dado a dado. */
+export interface TiradaAtaque {
+  readonly parametros: Parametros;
+  readonly numeroDeDados: number;
+  readonly dados: readonly number[];
+  /** Implacable: los dados que fallaron, vueltos a tirar, en el mismo orden. */
+  readonly repetidos: readonly number[];
+  readonly impactos: number;
+  readonly criticos: number;
+  readonly salvacionesNormales: readonly number[];
+  readonly salvacionesCriticos: readonly number[];
+  readonly bloqueados: number;
+  readonly danioBase: number;
+  readonly danioCritico: number;
+  readonly ventaja: number;
+  readonly total: number;
+}
 
-  let umbralImpacto = MELEE_HIT;
-  if (ctx.enCobertura) {
-    umbralImpacto = MELEE_HIT_COVER;
-    notas.push('Objetivo en cobertura: el atacante falla con 1, 2 y 3');
-  }
-  if (ctx.defensorBerserker) {
-    umbralImpacto = Math.max(umbralImpacto, MELEE_HIT_COVER);
-    notas.push('Berserker del defensor: el atacante falla con 1, 2 y 3');
-  }
+export function resolverAtaque(rng: Rng, p: Parametros): TiradaAtaque {
+  const numeroDeDados = p.cantidades.reduce<number>((s, c) => s + resolverCantidad(rng, c), 0);
+  const dados = rng.roll(numeroDeDados);
 
-  let umbralCritico = CRIT_BASE;
-  const brutal = getAbility(ab, 'Brutal X+');
-  if (brutal?.x !== undefined) {
-    umbralCritico = capThreshold(brutal.x);
-    notas.push(`Brutal ${umbralCritico}+: crítico con ${umbralCritico} o más`);
-  }
-
-  const numeroDeAtaques = resolverCantidad(rng, weapon.ataques) + (ctx.dadosExtra ?? 0);
-  if (typeof weapon.ataques !== 'number') {
-    notas.push(`Ataques variables: se tiran ${numeroDeAtaques} dados`);
-  }
-  if (ctx.dadosExtra) notas.push(`+${ctx.dadosExtra} dado(s) de ataque por habilidad de unidad`);
-
-  const dados = rng.roll(numeroDeAtaques);
-  let repetidos: number[] = [];
-  if (ctx.repetirFallos) {
-    const fallidos = dados.filter((d) => d < umbralImpacto).length;
-    repetidos = rng.roll(fallidos);
-  }
+  const impacta = (d: number): boolean => p.umbralImpacto === null || d >= p.umbralImpacto;
+  const fallos = dados.filter((d) => !impacta(d)).length;
+  const repetidos = p.implacable ? rng.roll(fallos) : [];
 
   let impactos = 0;
   let criticos = 0;
-  for (const d of [...dados, ...repetidos]) {
-    if (d < umbralImpacto) continue;
-    if (d >= umbralCritico) criticos++;
+  for (const d of [...dados.filter(impacta), ...repetidos.filter(impacta)]) {
+    if (d >= p.umbralCritico) criticos++;
     else impactos++;
   }
 
-  let umbralSalvacion = target.salvacion;
-  if (hasAbility(ab, 'Perforante')) {
-    umbralSalvacion += 1;
-    notas.push('Perforante: Salvación empeorada en 1');
-  }
-  umbralSalvacion = capThreshold(umbralSalvacion);
+  // Un 1 natural siempre falla la salvación; el umbral ya está acotado a 2+.
+  const salva = (d: number): boolean => d >= p.salvacion;
+  const salvacionesNormales = rng.roll(impactos);
+  const salvacionesCriticos = p.golpeCritico ? [] : rng.roll(criticos);
+  const bloqNormales = salvacionesNormales.filter(salva).length;
+  const bloqCriticos = salvacionesCriticos.filter(salva).length;
 
-  const dadosSalvacion = rng.roll(impactos + criticos);
-  let bloqueadosNormales = 0;
-  let bloqueadosCriticos = 0;
-  dadosSalvacion.forEach((d, i) => {
-    if (d === 1 || d < umbralSalvacion) return;
-    if (i < impactos) bloqueadosNormales++;
-    else bloqueadosCriticos++;
-  });
-
-  const danioBase = (impactos - bloqueadosNormales) * weapon.danio;
-  const danioCrit = (criticos - bloqueadosCriticos) * weapon.danioCritico;
-  const bruto = danioBase + danioCrit;
-
-  const anti = bonusAnti(rng, ab, target.clase, bruto > 0, notas);
-  const ventaja = bonusVentaja(attacker, target, bruto > 0, notas);
-  const danioTotal = bruto + anti + ventaja;
-  const retroceso = retrocesoInestable(rng, ab, danioTotal, notas);
-
-  const explosiva = getAbility(ab, 'Explosiva X');
-  const explosivaObjetivos = explosiva?.x !== undefined && danioTotal > 0 ? explosiva.x : 0;
+  const danioBase = (impactos - bloqNormales) * p.danio;
+  const danioCritico = (criticos - bloqCriticos) * p.danioCritico;
+  const bruto = danioBase + danioCritico;
+  const ventaja = bruto > 0 ? p.ventaja : 0;
 
   return {
-    dadosAtaque: dados,
-    dadosRepetidos: repetidos,
-    numeroDeAtaques,
+    parametros: p,
+    numeroDeDados,
+    dados,
+    repetidos,
     impactos,
     criticos,
-    dadosSalvacion,
-    impactosBloqueados: bloqueadosNormales + bloqueadosCriticos,
+    salvacionesNormales,
+    salvacionesCriticos,
+    bloqueados: bloqNormales + bloqCriticos,
     danioBase,
-    danioCritico: danioCrit,
-    bonusAntiX: anti,
-    bonusVentajaClase: ventaja,
-    danioTotal,
-    danioRetroceso: retroceso,
-    explosivaObjetivos,
-    umbralImpacto,
-    umbralSalvacion,
-    salvacionBase: target.salvacion,
-    enCobertura: ctx.enCobertura,
-    umbralCritico,
-    notas,
+    danioCritico,
+    ventaja,
+    total: bruto + ventaja,
   };
-}
-
-/** Ángulo muerto: el arma no puede disparar por debajo de la mitad de su rango. */
-export function anguloMuertoBloquea(weapon: RangedWeapon, distancia: number): boolean {
-  return hasAbility(weapon.habilidades, 'Angulo Muerto') && distancia < weapon.distancia / 2;
 }

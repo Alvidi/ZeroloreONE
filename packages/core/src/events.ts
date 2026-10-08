@@ -1,41 +1,67 @@
-import type { AttackResult } from './rules/combat.ts';
-import type { ActionKind, PlayerId, Vec2 } from './index.ts';
+import type { Vec2 } from './geometry.ts';
+import type { TiradaAtaque } from './rules/combat.ts';
+import type { ActionKind, PlayerId } from './types.ts';
 
 /**
- * Todo lo que ocurre en la partida se emite como evento. La interfaz se
- * construye a partir de estos eventos, no leyendo el estado a pelo: así se
- * pueden repetir partidas, hacer deshacer y sincronizar por red más adelante.
+ * Lo que ha pasado, con detalle suficiente para animarlo. La interfaz no
+ * deduce nada mirando el estado antes y después: lee estos eventos.
  */
 export type GameEvent =
-  | { type: 'TurnoIniciado'; turno: number }
-  | { type: 'IniciativaTirada'; tiradas: Record<PlayerId, number>; orden: readonly PlayerId[] }
-  | { type: 'UnidadActivada'; unitId: string; jugador: PlayerId }
-  | { type: 'AccionUsada'; unitId: string; accion: ActionKind; coste: number }
-  | { type: 'UnidadMovida'; unitId: string; desde: Vec2; hasta: Vec2; distancia: number }
-  | { type: 'DisparoResuelto'; attackerId: string; targetId: string; arma: string; resultado: AttackResult }
-  | { type: 'CargaResuelta'; unitId: string; targetId: string; dado: number; exito: boolean }
-  | { type: 'BarridoDeclarado'; unitId: string; objetivos: readonly string[] }
-  | { type: 'CaCResuelto'; attackerId: string; targetId: string; arma: string; resultado: AttackResult }
-  | { type: 'DestrabeResuelto'; unitId: string; dado: number; exito: boolean }
+  | { type: 'IniciativaTirada'; turno: number; tiradas: Readonly<Record<PlayerId, number>>; orden: readonly PlayerId[] }
+  | { type: 'UnidadDesplegada'; unidadId: string; owner: PlayerId; puestoId: string }
+  | { type: 'MiniaturaReforzada'; unidadId: string; miniId: string }
+  | { type: 'DesplieguePasado'; jugador: PlayerId }
+  | { type: 'ActivacionesAbiertas'; turno: number }
+  | { type: 'UnidadActivada'; unidadId: string; jugador: PlayerId }
+  | { type: 'AccionUsada'; unidadId: string; accion: ActionKind; coste: number }
+  | {
+      type: 'UnidadMovida';
+      unidadId: string;
+      desde: Readonly<Record<string, Vec2>>;
+      hasta: Readonly<Record<string, Vec2>>;
+      corriendo: boolean;
+    }
+  | {
+      type: 'AtaqueResuelto';
+      atacanteId: string;
+      objetivoId: string;
+      arma: 'disparo' | 'cac';
+      /** Qué parte de la unidad ataca: la tropa, el Comandante, o la miniatura suelta. */
+      parte: 'tropa' | 'comandante' | 'unidad';
+      minis: number;
+      enCobertura: boolean;
+      gratuito: boolean;
+      tirada: TiradaAtaque;
+    }
+  | { type: 'ExplosivaAlcanza'; atacanteId: string; unidadId: string; minis: number; danio: number }
+  | {
+      type: 'DanioRecibido';
+      unidadId: string;
+      danio: number;
+      /** Lo que se quitó Resistente. */
+      reducido: number;
+      muertas: readonly string[];
+      porId: string | null;
+    }
+  | { type: 'UnidadDestruida'; unidadId: string; owner: PlayerId; porId: string | null }
+  | {
+      type: 'CargaResuelta';
+      unidadId: string;
+      objetivoId: string;
+      dado: number;
+      exito: boolean;
+      desde: Readonly<Record<string, Vec2>>;
+      hasta: Readonly<Record<string, Vec2>>;
+    }
   | { type: 'UnidadesTrabadas'; a: string; b: string }
-  | { type: 'AtaqueGratuitoPendiente'; unitId: string; targetId: string }
-  | { type: 'DanioAplicado'; unitId: string; danio: number; vidasRestantes: number }
-  | { type: 'UnidadDestruida'; unitId: string }
-  | { type: 'ExplosivaAlcanza'; attackerId: string; origenId: string; afectados: readonly string[]; danio: number }
-  | { type: 'UnidadRetirada'; unitId: string }
-  | { type: 'UnidadDesplegada'; unitId: string; puestoId: string; posicion: Vec2 }
-  | { type: 'PuestoConquistado'; puestoId: string; jugador: PlayerId | null; anterior: PlayerId | null }
-  | { type: 'PuntosGanados'; jugador: PlayerId; puntos: number; total: number }
-  | { type: 'ActivacionTerminada'; unitId: string }
+  | { type: 'AtaqueGratuitoPendiente'; unidadId: string; objetivoId: string }
+  | { type: 'DestrabeResuelto'; unidadId: string; dado: number; exito: boolean }
+  | { type: 'ActivacionTerminada'; unidadId: string }
   | { type: 'TurnoTerminado'; turno: number }
-  | { type: 'PartidaTerminada'; ganador: PlayerId | null };
-
-/** Fallo de validación: la acción no se aplica y se explica por qué. */
-export interface RuleViolation {
-  readonly ok: false;
-  readonly reason: string;
-}
+  | { type: 'PuestoConquistado'; puestoId: string; jugador: PlayerId | null; anterior: PlayerId | null }
+  | { type: 'PuntosGanados'; jugador: PlayerId; puntos: number; motivo: string; total: number }
+  | { type: 'PartidaTerminada'; ganador: PlayerId | null; motivo: string };
 
 export type CommandResult =
   | { readonly ok: true; readonly events: readonly GameEvent[] }
-  | RuleViolation;
+  | { readonly ok: false; readonly reason: string };
