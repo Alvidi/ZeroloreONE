@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OBJETOS } from '@zerolore/data';
 import {
+  COHERENCIA,
   Engine,
+  Rng,
   anclaDe,
+  centerDistance,
+  comandanteDe,
   puedeDesplegarEn,
   siguienteJugada,
   vidasDe,
@@ -11,6 +15,7 @@ import {
   type GameEvent,
   type GameState,
   type PlayerId,
+  type Unidad,
   type Vec2,
 } from '@zerolore/core';
 import { Tablero } from './tablero/Tablero.tsx';
@@ -22,6 +27,18 @@ import { Panel, FichaDetalle, type Carta } from './hud/Panel.tsx';
 import { Duelo, type DueloProps, type LadoDuelo } from './hud/Duelo.tsx';
 import { TiradaRapida } from './hud/TiradaRapida.tsx';
 import { Menu, type Modalidad } from './hud/Menu.tsx';
+import { Armeria, type Rival } from './hud/Armeria.tsx';
+import {
+  ESTILOS,
+  PRESUPUESTO_INICIAL,
+  aLista,
+  cargarLista,
+  guardarLista,
+  listaAleatoria,
+  listaDeEstilo,
+  listaInicial,
+  type Fila,
+} from './ejercito.ts';
 import { rotulo } from './hud/nombres.ts';
 import { TiradaIniciativa } from './TiradaIniciativa.tsx';
 import { Hoja } from './Hoja.tsx';
@@ -30,18 +47,35 @@ import {
   alcances,
   colocarDespliegue,
   colocarMovimiento,
+  cadenaDe,
   coberturasDelTiro,
-  comandanteParaRefuerzo,
+  comandanteCercano,
   consulta,
   huecoDeRefuerzo,
   motivoActivar,
   objetivosPara,
+  piezasCadena,
   revisarColocacion,
   trayectorias,
   type Colocacion,
   type ColocacionDespliegue,
+  type Desplazamiento,
+  type Eslabon,
+  type PiezaCadena,
 } from './juego.ts';
 import { CSS_JUGADOR, HUMANO, MAQUINA, NOMBRE_JUGADOR, TIPOS, nuevaPartida, semillaNueva } from './partida.ts';
+import type { EntradaLista } from '@zerolore/core';
+
+/**
+ * Las dos listas de la partida: la tuya, y la del rival según lo elegido. La
+ * del rival al azar sale de la semilla, para que "otra partida igual" lo sea.
+ */
+function listasDePartida(filas: readonly Fila[], presupuesto: number, rival: Rival, semilla: number): Record<PlayerId, EntradaLista[]> {
+  const estilo = ESTILOS.find((e) => e.id === rival);
+  const rng = new Rng(semilla ^ 0x9e3779b9);
+  const suya = rival === 'azar' ? listaAleatoria(presupuesto, () => rng.next()) : estilo ? listaDeEstilo(estilo, presupuesto) : filas;
+  return { A: aLista(filas), B: aLista(suya) };
+}
 
 // ------------------------------------------------------------------ Ritmo
 
@@ -58,10 +92,26 @@ type Apuntable = 'Disparar' | 'Cargar' | 'AtacarCaC';
 
 type Modo =
   | { readonly k: 'nada' }
-  | { readonly k: 'mover'; readonly accion: 'Mover' | 'Correr'; readonly colocacion: Colocacion | null; readonly fijado: boolean; readonly arrastre: string | null }
+  | {
+      readonly k: 'mover';
+      readonly accion: Desplazamiento;
+      readonly colocacion: Colocacion | null;
+      readonly fijado: boolean;
+      /** La miniatura que se arrastra: si es el Comandante, tira de toda la formación. */
+      readonly arrastre: string | null;
+      /** La formación al empezar a arrastrar, para que el Comandante la lleve sin deformarla. */
+      readonly molde: Readonly<Record<string, Vec2>> | null;
+    }
   | { readonly k: 'apuntar'; readonly accion: Apuntable; readonly objetivo: string | null }
   | { readonly k: 'desplegar'; readonly reservaId: string; readonly colocacion: ColocacionDespliegue | null }
-  | { readonly k: 'reforzar'; readonly reservaId: string; readonly unidadId: string | null; readonly posicion: Vec2 | null };
+  | {
+      readonly k: 'reforzar';
+      readonly reservaId: string;
+      readonly unidadId: string | null;
+      readonly posicion: Vec2 | null;
+      /** Si está sobre un Comandante que no la admite, por qué. */
+      readonly rechazo: string | null;
+    };
 
 /** Lo que se está enseñando por encima de la mesa, uno detrás de otro. */
 type Paso = { readonly id: number } & (
@@ -80,7 +130,14 @@ const MANO_INICIAL = ['botiquin', 'botas-ligeras', 'super-golpe'];
 
 export function App() {
   const [semilla, setSemilla] = useState(semillaNueva);
-  const motor = useRef<Engine>(new Engine(nuevaPartida(semilla)));
+  // La lista se recuerda entre visitas: es lo que vas afinando partida tras partida.
+  const [ejercito, setEjercito] = useState<{ filas: Fila[]; presupuesto: number; rival: Rival }>(() => {
+    const guardada = cargarLista();
+    return guardada && guardada.filas.length > 0
+      ? { ...guardada, rival: 'espejo' }
+      : { filas: listaInicial(), presupuesto: PRESUPUESTO_INICIAL, rival: 'espejo' };
+  });
+  const motor = useRef<Engine>(new Engine(nuevaPartida(semilla, listasDePartida(ejercito.filas, ejercito.presupuesto, ejercito.rival, semilla))));
   const [estado, setEstado] = useState<GameState>(() => motor.current.getState());
   const [vista, setVista] = useState<GameState>(estado);
   const [guion, setGuion] = useState<Paso[]>([]);
@@ -94,7 +151,7 @@ export function App() {
   const [hover, setHover] = useState<string | null>(null);
   const [maquinas, setMaquinas] = useState<Record<PlayerId, boolean>>({ A: false, B: true });
   const [ajustes, setAjustes] = useState(false);
-  const [pantalla, setPantalla] = useState<'menu' | 'partida'>('menu');
+  const [pantalla, setPantalla] = useState<'menu' | 'armeria' | 'partida'>('menu');
   const [empezada, setEmpezada] = useState(false);
   const [rapido, setRapidoEstado] = useState<boolean>(() => {
     try {
@@ -159,7 +216,7 @@ export function App() {
   // Solo en desarrollo: acceso al motor desde la consola para depurar.
   useEffect(() => {
     if (!import.meta.env.DEV) return;
-    (window as unknown as { __zl: unknown }).__zl = { motor, ejecutar, siguienteJugada };
+    (window as unknown as { __zl: unknown }).__zl = { motor, ejecutar, siguienteJugada, escena };
   }, [ejecutar]);
 
   const avanzarGuion = useCallback((): void => {
@@ -170,17 +227,32 @@ export function App() {
     ponerGuion(resto);
   }, [ponerGuion]);
 
+  /**
+   * Contra la máquina se pasa antes por la armería, a montar la lista. Máquina
+   * contra máquina arranca ya, con tu lista guardada contra el rival elegido:
+   * así ves a la IA jugar con tu propio ejército.
+   */
   const empezar = (m: Modalidad): void => {
-    setMaquinas(m === 'maquina-maquina' ? { A: true, B: true } : { A: false, B: true });
+    if (m === 'humano-maquina') {
+      setMaquinas({ A: false, B: true });
+      setPantalla('armeria');
+      return;
+    }
+    setMaquinas({ A: true, B: true });
     nueva();
     setEmpezada(true);
     setPantalla('partida');
   };
 
+  const cambiarEjercito = (filas: Fila[], presupuesto: number, rival: Rival): void => {
+    setEjercito({ filas, presupuesto, rival });
+    guardarLista(filas, presupuesto);
+  };
+
   const nueva = (misma = false): void => {
     const s = misma ? semilla : semillaNueva();
     setSemilla(s);
-    motor.current = new Engine(nuevaPartida(s));
+    motor.current = new Engine(nuevaPartida(s, listasDePartida(ejercito.filas, ejercito.presupuesto, ejercito.rival, s)));
     const e = motor.current.getState();
     setEstado(e);
     setVista(e);
@@ -244,7 +316,7 @@ export function App() {
   const elegirAccion = (kind: ActionKind): void => {
     if (!unidadSel) return;
     if (kind === 'Mover' || kind === 'Correr') {
-      setModo({ k: 'mover', accion: kind, colocacion: null, fijado: false, arrastre: null });
+      setModo({ k: 'mover', accion: kind, colocacion: null, fijado: false, arrastre: null, molde: null });
     } else if (kind === 'Destrabarse') {
       if (asegurarActiva(unidadSel.id)) ejecutar({ type: 'Destrabarse', unidadId: unidadSel.id });
     } else {
@@ -266,6 +338,10 @@ export function App() {
       return;
     }
     const posiciones = modo.colocacion.posiciones;
+    if (modo.accion === 'Recolocar') {
+      if (ejecutar({ type: 'Recolocar', unidadId: unidadSel.id, posiciones })) setModo(MODO_NADA);
+      return;
+    }
     if (asegurarActiva(unidadSel.id) && ejecutar({ type: modo.accion, unidadId: unidadSel.id, posiciones })) setModo(MODO_NADA);
   };
 
@@ -294,7 +370,11 @@ export function App() {
     const e = new Engine(estado);
     const porPuesto = estado.puestos.some((p) => puedeDesplegarEn(estado, p, HUMANO));
     const porRefuerzo = Object.values(estado.unidades).some((u) => e.motivoRefuerzo(u, reservaId) === null);
-    return porPuesto || porRefuerzo;
+    // Un soldado suelto se deja coger si hay algún Comandante tuyo en mesa,
+    // aunque no lo admita: al soltarlo encima se explica por qué no cabe.
+    const suelta = r.minis.length === 1 && !r.minis[0]!.esComandante;
+    const hayComandante = suelta && Object.values(estado.unidades).some((u) => u.owner === HUMANO && comandanteDe(u));
+    return porPuesto || porRefuerzo || hayComandante;
   };
 
   const cogerReserva = (reservaId: string): void => {
@@ -304,11 +384,24 @@ export function App() {
     const hayPuesto = estado.puestos.some((p) => puedeDesplegarEn(estado, p, HUMANO));
     // Una miniatura suelta sin puesto libre solo puede ir de refuerzo.
     setModo(suelta && !hayPuesto
-      ? { k: 'reforzar', reservaId, unidadId: null, posicion: null }
+      ? { k: 'reforzar', reservaId, unidadId: null, posicion: null, rechazo: null }
       : { k: 'desplegar', reservaId, colocacion: null });
   };
 
   // ------------------------------------------------------------ Ratón
+
+  /**
+   * En el despliegue inicial, pulsar una miniatura propia y arrastrar abre el
+   * ajuste de la formación. Se espera a que el ratón se mueva un poco: un clic
+   * sin arrastrar solo selecciona.
+   */
+  const arranque = useRef<{ unidadId: string; miniId: string; p: Vec2 } | null>(null);
+
+  /** La colocación al arrastrar una miniatura: el Comandante lleva a toda la escuadra. */
+  const arrastrarA = (u: Unidad, accion: Desplazamiento, miniId: string, molde: Readonly<Record<string, Vec2>>, p: Vec2): Colocacion => {
+    if (miniId === anclaDe(u).id && u.minis.length > 1) return colocarMovimiento(estado, u.id, accion, p, molde);
+    return revisarColocacion(estado, u.id, accion, { ...molde, [miniId]: p });
+  };
 
   const eventos = {
     alPulsar: (p: Vec2, miniId: string | null, unidadId: string | null, boton: number): void => {
@@ -318,11 +411,13 @@ export function App() {
         return;
       }
       if (modo.k === 'mover') {
-        if (modo.fijado && miniId && unidadSel && miniId.startsWith(`${unidadSel.id}.`)) {
-          setModo({ ...modo, arrastre: miniId });
+        if (modo.fijado && modo.colocacion && miniId && unidadSel && miniId.startsWith(`${unidadSel.id}.`)) {
+          setModo({ ...modo, arrastre: miniId, molde: modo.colocacion.posiciones });
           return;
         }
-        if (unidadSel) setModo({ ...modo, colocacion: colocarMovimiento(estado, unidadSel.id, modo.accion, p), fijado: true, arrastre: null });
+        if (unidadSel && modo.accion !== 'Recolocar') {
+          setModo({ ...modo, colocacion: colocarMovimiento(estado, unidadSel.id, modo.accion, p), fijado: true, arrastre: null });
+        }
         return;
       }
       if (modo.k === 'apuntar') {
@@ -334,16 +429,30 @@ export function App() {
         return;
       }
       if (modo.k === 'desplegar' || modo.k === 'reforzar') return; // se resuelve al soltar
+      const u = unidadId ? estado.unidades[unidadId] : undefined;
+      if (u && miniId && turnoHumano && u.owner === HUMANO && new Engine(estado).motivoRecolocar(u, null) === null) {
+        arranque.current = { unidadId: u.id, miniId, p };
+      }
       setSeleccion(unidadId);
     },
 
     alMover: (p: Vec2 | null, unidadBajo: string | null): void => {
       setHover(unidadBajo);
       if (!p || ocupado) return;
+      const a = arranque.current;
+      if (a && modo.k === 'nada' && centerDistance(a.p, p) > 0.3) {
+        arranque.current = null;
+        const u = estado.unidades[a.unidadId];
+        if (u) {
+          const molde = Object.fromEntries(u.minis.map((m) => [m.id, m.posicion]));
+          setSeleccion(u.id);
+          setModo({ k: 'mover', accion: 'Recolocar', colocacion: arrastrarA(u, 'Recolocar', a.miniId, molde, p), fijado: true, arrastre: a.miniId, molde });
+        }
+        return;
+      }
       if (modo.k === 'mover' && unidadSel) {
-        if (modo.arrastre && modo.colocacion) {
-          const posiciones = { ...modo.colocacion.posiciones, [modo.arrastre]: p };
-          setModo({ ...modo, colocacion: revisarColocacion(estado, unidadSel.id, modo.accion, posiciones) });
+        if (modo.arrastre && modo.molde) {
+          setModo({ ...modo, colocacion: arrastrarA(unidadSel, modo.accion, modo.arrastre, modo.molde, p) });
         } else if (!modo.fijado) {
           setModo({ ...modo, colocacion: colocarMovimiento(estado, unidadSel.id, modo.accion, p) });
         }
@@ -351,16 +460,21 @@ export function App() {
         setModo({ ...modo, colocacion: colocarDespliegue(estado, modo.reservaId, p) });
       } else if (modo.k === 'reforzar') {
         const r = estado.reserva.find((x) => x.id === modo.reservaId);
-        const u = r ? comandanteParaRefuerzo(estado, modo.reservaId, p) : null;
-        const posicion = u && r ? huecoDeRefuerzo(estado, u, r.minis[0]!.tipoId, p) : null;
-        setModo({ ...modo, unidadId: u?.id ?? null, posicion });
+        const c = r ? comandanteCercano(estado, modo.reservaId, p) : null;
+        if (c && c.motivo === null && r) {
+          setModo({ ...modo, unidadId: c.u.id, posicion: huecoDeRefuerzo(estado, c.u, r.minis[0]!.tipoId, p), rechazo: null });
+        } else {
+          // Sobre un Comandante que no la admite, el fantasma va en rojo bajo el cursor.
+          setModo({ ...modo, unidadId: null, posicion: c ? p : null, rechazo: c?.motivo ?? null });
+        }
       }
     },
 
     alSoltar: (p: Vec2): void => {
+      arranque.current = null;
       if (ocupado) return;
       if (modo.k === 'mover' && modo.arrastre) {
-        setModo({ ...modo, arrastre: null });
+        setModo({ ...modo, arrastre: null, molde: null });
       } else if (modo.k === 'desplegar') {
         const c = colocarDespliegue(estado, modo.reservaId, p);
         if (c?.valida && c.puestoId) {
@@ -368,14 +482,21 @@ export function App() {
         } else {
           // Suelta en mal sitio: ¿era un refuerzo para un Comandante?
           const r = estado.reserva.find((x) => x.id === modo.reservaId);
-          const u = r && r.minis.length === 1 ? comandanteParaRefuerzo(estado, modo.reservaId, p) : null;
-          const sitio = u && r ? huecoDeRefuerzo(estado, u, r.minis[0]!.tipoId, p) : null;
-          if (u && sitio) {
-            if (ejecutar({ type: 'Reforzar', unidadId: u.id, reservaId: modo.reservaId, posicion: sitio })) setModo(MODO_NADA);
+          const c = r && r.minis.length === 1 ? comandanteCercano(estado, modo.reservaId, p) : null;
+          if (c && c.motivo !== null) {
+            avisar(`Aquí no puedes: ${c.motivo}`, 'error');
+          } else if (c && r) {
+            const sitio = huecoDeRefuerzo(estado, c.u, r.minis[0]!.tipoId, p);
+            if (sitio && ejecutar({ type: 'Reforzar', unidadId: c.u.id, reservaId: modo.reservaId, posicion: sitio })) setModo(MODO_NADA);
           }
         }
-      } else if (modo.k === 'reforzar' && modo.unidadId && modo.posicion) {
-        if (ejecutar({ type: 'Reforzar', unidadId: modo.unidadId, reservaId: modo.reservaId, posicion: modo.posicion })) setModo(MODO_NADA);
+      } else if (modo.k === 'reforzar') {
+        if (modo.unidadId && modo.posicion) {
+          if (ejecutar({ type: 'Reforzar', unidadId: modo.unidadId, reservaId: modo.reservaId, posicion: modo.posicion })) setModo(MODO_NADA);
+        } else if (modo.rechazo) {
+          avisar(`Aquí no puedes: ${modo.rechazo}`, 'error');
+          setModo({ ...modo, posicion: null, rechazo: null });
+        }
       }
     },
   };
@@ -416,11 +537,11 @@ export function App() {
       }
     } else if (modo.k === 'reforzar' && modo.posicion) {
       const r = estado.reserva.find((x) => x.id === modo.reservaId);
-      if (r) fantasma = { owner: r.owner, piezas: [{ id: r.id, tipoId: r.minis[0]!.tipoId, esComandante: false, posicion: modo.posicion, valida: true }] };
+      if (r) fantasma = { owner: r.owner, piezas: [{ id: r.id, tipoId: r.minis[0]!.tipoId, esComandante: false, posicion: modo.posicion, valida: modo.rechazo === null }] };
     }
 
     let auraMovimiento: DatosEscena['auraMovimiento'] = null;
-    if (modo.k === 'mover' && unidadSel) {
+    if (modo.k === 'mover' && unidadSel && modo.accion !== 'Recolocar') {
       const e = consulta(estado, unidadSel.id);
       const u = e.getState().unidades[unidadSel.id]!;
       auraMovimiento = {
@@ -435,7 +556,43 @@ export function App() {
     else if (modo.k === 'nada' && hover && estado.unidades[hover]?.owner !== HUMANO) auraAlcance = alcances(estado, hover);
     else if (modo.k === 'nada' && unidadSel) auraAlcance = alcances(estado, unidadSel.id);
 
+    // La cadena de coherencia: quién engancha con quién mientras se coloca algo.
+    const zonaDe = (piezas: readonly PiezaCadena[]) => piezas.map((q) => ({ centro: q.centro, radio: q.radio + COHERENCIA }));
+    let cadena: DatosEscena['cadena'] = null;
+    if (modo.k === 'mover' && modo.colocacion && unidadSel && unidadSel.minis.length > 1) {
+      const piezas = piezasCadena(unidadSel, modo.colocacion.posiciones);
+      const ancla = anclaDe(unidadSel).id;
+      // Arrastrando un soldado se ve la pulgada de los demás: dónde puede caer.
+      const zona = modo.arrastre && modo.arrastre !== ancla ? zonaDe(piezas.filter((q) => q.id !== modo.arrastre)) : [];
+      cadena = { owner: unidadSel.owner, eslabones: cadenaDe(piezas, ancla, modo.arrastre), zona };
+    } else if (modo.k === 'reforzar') {
+      const r = estado.reserva.find((x) => x.id === modo.reservaId);
+      if (r) {
+        const e = new Engine(estado);
+        const eslabones: Eslabon[] = [];
+        const zona: { centro: Vec2; radio: number }[] = [];
+        // Todos los Comandantes que la admiten enseñan su pulgada; el elegido, el enganche nuevo.
+        for (const u of Object.values(estado.unidades)) {
+          if (u.owner !== r.owner || e.motivoRefuerzo(u, r.id) !== null) continue;
+          const propias = piezasCadena(u);
+          zona.push(...zonaDe(propias));
+          const elegido = u.id === modo.unidadId && modo.posicion;
+          const nueva: PiezaCadena[] = elegido
+            ? [{ id: '·nueva', centro: modo.posicion!, radio: TIPOS[r.minis[0]!.tipoId]!.radioPeana }]
+            : [];
+          eslabones.push(...cadenaDe([...propias, ...nueva], anclaDe(u).id, elegido ? '·nueva' : null));
+        }
+        cadena = { owner: r.owner, eslabones, zona };
+      }
+    } else if (modo.k === 'nada' && estado.fase === 'Despliegue' && unidadSel && unidadSel.minis.length > 1) {
+      cadena = { owner: unidadSel.owner, eslabones: cadenaDe(piezasCadena(unidadSel), anclaDe(unidadSel).id, null), zona: [] };
+    }
+
     const despliegue = estado.fase === 'Despliegue' && estado.jugadorActivo === HUMANO;
+    // Recolocando, el puesto que el Comandante no puede dejar de tocar.
+    const puestosRecolocar = modo.k === 'mover' && modo.accion === 'Recolocar'
+      ? estado.puestos.filter((p) => p.duenio === HUMANO && estado.puestosUsados.includes(p.id)).map((p) => p.id)
+      : [];
     return {
       estado: vista,
       humano: HUMANO,
@@ -443,13 +600,16 @@ export function App() {
       hover,
       objetivos,
       objetivo: objetivoMarcado,
-      puestosResaltados: despliegue ? estado.puestos.filter((p) => puedeDesplegarEn(estado, p, HUMANO)).map((p) => p.id) : [],
+      puestosResaltados: despliegue
+        ? [...estado.puestos.filter((p) => puedeDesplegarEn(estado, p, HUMANO)).map((p) => p.id), ...puestosRecolocar]
+        : [],
       fantasma,
       ocultarUnidad: modo.k === 'mover' && modo.colocacion ? seleccion : null,
       auraMovimiento,
       auraAlcance: ocupado ? null : auraAlcance,
       trayectorias: objetivoMarcado && unidadSel && modoAtaque ? trayectorias(estado, unidadSel.id, objetivoMarcado, modoAtaque) : [],
       coberturas: objetivoMarcado && unidadSel && modoAtaque === 'disparo' ? coberturasDelTiro(estado, unidadSel.id, objetivoMarcado) : [],
+      cadena: ocupado ? null : cadena,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vista, estado, modo, seleccion, hover, ocupado]);
@@ -516,8 +676,12 @@ export function App() {
     );
   })();
 
-  // Centro del panel: la previsión si se apunta, la ficha si no.
-  const centro = (() => {
+  /*
+    Lo que flota sobre la mesa, abajo en el centro: la previsión si se apunta,
+    la ficha de lo que se mira si no. Y arriba, una pista corta de qué hacer.
+    Nada de esto ocupa sitio fijo: aparece cuando hace falta.
+  */
+  const info = (() => {
     if (modo.k === 'apuntar' && unidadSel && objetivoMarcado && modoAtaque) {
       const e = consulta(estado, unidadSel.id);
       const pr = e.prevision(unidadSel.id, objetivoMarcado, modoAtaque);
@@ -536,15 +700,30 @@ export function App() {
         );
       }
     }
-    if (modo.k === 'apuntar') return <div className="pista">Elige objetivo{modo.accion === 'Cargar' ? ' para cargar' : ''}</div>;
-    if (modo.k === 'mover') {
-      return <div className="pista">{modo.fijado ? 'Arrastra miniaturas para ajustar y confirma con ✓' : 'Lleva al Comandante a su sitio y haz clic'}</div>;
-    }
-    if (modo.k === 'desplegar') return <div className="pista">Suelta la unidad tocando un puesto que palpite</div>;
-    if (modo.k === 'reforzar') return <div className="pista">Suéltala junto a la escuadra de un Comandante</div>;
+    if (modo.k !== 'nada' || ocupado) return null;
     const mirada = (hover && estado.unidades[hover]) || unidadSel;
-    if (mirada) return <FichaDetalle estado={estado} u={mirada} />;
-    if (estado.fase === 'Despliegue' && turnoHumano) return <div className="pista">Arrastra una unidad de tu Reserva a un puesto</div>;
+    return mirada ? <FichaDetalle estado={estado} u={mirada} /> : null;
+  })();
+
+  const pista = (() => {
+    if (ocupado) return null;
+    if (modo.k === 'apuntar' && !objetivoMarcado) return modo.accion === 'Cargar' ? 'Elige a quién cargar' : 'Elige objetivo';
+    if (modo.k === 'mover' && modo.accion === 'Recolocar') {
+      return 'Arrastra al Comandante y la escuadra le sigue; arrastra un soldado para colocarlo a mano. Confirma con ✓';
+    }
+    if (modo.k === 'mover') {
+      return modo.fijado
+        ? 'Arrastra al Comandante para llevar la formación, o un soldado para ajustarlo. Confirma con ✓'
+        : 'Lleva al Comandante a su sitio y haz clic';
+    }
+    if (modo.k === 'desplegar') return 'Suelta la unidad tocando un puesto que palpite';
+    if (modo.k === 'reforzar') return modo.rechazo ? `Aquí no: ${modo.rechazo}` : 'Suéltala junto a tu Comandante para sumarla a su escuadra';
+    if (estado.fase === 'Despliegue' && turnoHumano) {
+      const hayPuesto = estado.puestos.some((p) => puedeDesplegarEn(estado, p, HUMANO));
+      return hayPuesto
+        ? 'Arrastra una unidad de tu Reserva a un puesto'
+        : 'Arrastra soldados hasta tu Comandante; arrastra la escuadra para recolocarla. Pulsa Listo al terminar';
+    }
     return null;
   })();
 
@@ -559,6 +738,22 @@ export function App() {
   // ---------------------------------------------------------------- Pintar
 
   const paso = guion[0];
+  if (pantalla === 'armeria') {
+    return (
+      <Armeria
+        filas={ejercito.filas}
+        presupuesto={ejercito.presupuesto}
+        rival={ejercito.rival}
+        onCambiar={cambiarEjercito}
+        onVolver={() => setPantalla('menu')}
+        onJugar={() => {
+          nueva();
+          setEmpezada(true);
+          setPantalla('partida');
+        }}
+      />
+    );
+  }
   if (pantalla === 'menu') {
     return (
       <Menu
@@ -582,6 +777,8 @@ export function App() {
         <div className="avisos">
           {avisos.map((a) => <div key={a.id} className={`aviso ${a.tipo}`}>{a.texto}</div>)}
         </div>
+        {pista && <div className="pista-flotante">{pista}</div>}
+        {info && <div className="info-flotante">{info}</div>}
         {estado.fase === 'Despliegue' && !turnoHumano && !ocupado && (
           <div className="banner">Despliega {NOMBRE_JUGADOR[estado.jugadorActivo ?? MAQUINA]}</div>
         )}
@@ -591,7 +788,6 @@ export function App() {
         estado={estado}
         jugador={HUMANO}
         seleccion={seleccion}
-        centro={centro}
         cartas={cartas}
         reservaEnMano={modo.k === 'desplegar' || modo.k === 'reforzar' ? modo.reservaId : null}
         puedeDesplegar={puedeDesplegarReserva}

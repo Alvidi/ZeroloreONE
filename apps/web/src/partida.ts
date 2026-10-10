@@ -24,29 +24,6 @@ export const COLOR_JUGADOR: Record<PlayerId, number> = { A: 0x3b82f6, B: 0xef444
 export const CSS_JUGADOR: Record<PlayerId, string> = { A: '#3b82f6', B: '#ef4444' };
 
 /**
- * Ejércitos de prueba con los siete perfiles del prototipo. Azul es de
- * disparo con un martillo de Choques; Rojo, una marea de Milicia con un
- * Exterminador y una escuadra de Tiradores. Las sueltas sirven para reforzar
- * a los Comandantes o para salir solas.
- */
-const LISTAS: Record<PlayerId, EntradaLista[]> = {
-  A: [
-    { tipoId: 'comandante-disparo', escuadra: { tipoId: 'tirador', cantidad: 3 } },
-    { tipoId: 'comandante-cac', escuadra: { tipoId: 'choque', cantidad: 3 } },
-    { tipoId: 'juggernaut' },
-    { tipoId: 'tirador' },
-    { tipoId: 'choque' },
-  ],
-  B: [
-    { tipoId: 'comandante-cac', escuadra: { tipoId: 'milicia', cantidad: 6 } },
-    { tipoId: 'exterminador' },
-    { tipoId: 'comandante-disparo', escuadra: { tipoId: 'tirador', cantidad: 3 } },
-    { tipoId: 'milicia' },
-    { tipoId: 'milicia' },
-  ],
-};
-
-/**
  * Mesa de 60×30 con simetría central: lo que tiene un bando lo tiene el otro
  * girado media vuelta. Los Cuarteles Generales en los bordes largos y tres
  * puestos neutrales que, conquistados, aceleran los refuerzos.
@@ -77,11 +54,12 @@ export function semillaNueva(): number {
   return a[0]!;
 }
 
-export function nuevaPartida(semilla: number): GameState {
+/** Monta la partida con las listas de cada bando, todo en Reserva. */
+export function nuevaPartida(semilla: number, listas: Readonly<Record<PlayerId, readonly EntradaLista[]>>): GameState {
   return crearPartida({
     tipos: TIPOS,
     jugadores: ['A', 'B'],
-    listas: LISTAS,
+    listas,
     terreno: TERRENO,
     puestos: PUESTOS,
     mesa: MESA,

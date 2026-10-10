@@ -4,7 +4,7 @@ import {
   Container,
   Graphics,
   Sprite,
-
+  Text,
   type FederatedPointerEvent,
   type Texture,
 } from 'pixi.js';
@@ -29,6 +29,17 @@ export interface PiezaFantasma {
   readonly valida: boolean;
 }
 
+/** Un eslabón de la cadena de coherencia, de peana a peana. */
+export interface EslabonEscena {
+  readonly a: Vec2;
+  readonly ra: number;
+  readonly b: Vec2;
+  readonly rb: number;
+  /** Hueco entre peanas, en pulgadas: es lo que se rotula. */
+  readonly hueco: number;
+  readonly tipo: 'ok' | 'camino' | 'nuevo' | 'roto';
+}
+
 export interface DatosEscena {
   readonly estado: GameState;
   readonly humano: PlayerId;
@@ -49,6 +60,15 @@ export interface DatosEscena {
   readonly trayectorias: readonly { readonly desde: Vec2; readonly hasta: Vec2 }[];
   /** Escenografía que da cobertura en el tiro marcado: se ilumina. */
   readonly coberturas: readonly string[];
+  /**
+   * La cadena de la escuadra que se está colocando: quién engancha con quién,
+   * y la pulgada alrededor de cada miniatura donde cabe un soldado más.
+   */
+  readonly cadena: {
+    readonly owner: PlayerId;
+    readonly eslabones: readonly EslabonEscena[];
+    readonly zona: readonly { readonly centro: Vec2; readonly radio: number }[];
+  } | null;
 }
 
 export interface EventosEscena {
@@ -90,6 +110,8 @@ export class Escena {
   private readonly marcas = new Graphics();
   private readonly minis = new Container();
   private readonly fantasmas = new Container();
+  private readonly enlaces = new Graphics();
+  private readonly rotulos = new Container();
   private readonly nodos = new Map<string, NodoMini>();
   private readonly texturas = new Map<string, Texture>();
   private datos: DatosEscena | null = null;
@@ -138,7 +160,7 @@ export class Escena {
 
   private montar(): void {
     const { app } = this;
-    this.mundo.addChild(this.suelo, this.terreno, this.puestos, this.auras, this.lineas, this.minis, this.marcas, this.fantasmas);
+    this.mundo.addChild(this.suelo, this.terreno, this.puestos, this.auras, this.lineas, this.minis, this.marcas, this.enlaces, this.fantasmas, this.rotulos);
     app.stage.addChild(this.mundo);
 
     app.stage.eventMode = 'static';
@@ -260,6 +282,7 @@ export class Escena {
     this.sincronizarMinis();
     this.dibujarFantasmas();
     this.dibujarMarcas();
+    this.dibujarCadena();
   }
 
   private dibujarSuelo(): void {
@@ -324,6 +347,16 @@ export class Escena {
       const velo = new Graphics().rect(0, 0, ancho, alto).fill({ color: ROJO, alpha: 0.075 });
       const molde = new Graphics();
       for (const c of d.auraAlcance) molde.circle(c.centro.x, c.centro.y, c.radio).fill({ color: 0xffffff });
+      velo.mask = molde;
+      this.auras.addChild(molde, velo);
+    }
+
+    if (d.cadena && d.cadena.zona.length > 0) {
+      // La pulgada de coherencia: dónde puede caer un soldado sin soltarse.
+      const color = COLOR_JUGADOR[d.cadena.owner] ?? NEUTRO;
+      const velo = new Graphics().rect(0, 0, ancho, alto).fill({ color, alpha: 0.11 });
+      const molde = new Graphics();
+      for (const c of d.cadena.zona) molde.circle(c.centro.x, c.centro.y, c.radio).fill({ color: 0xffffff });
       velo.mask = molde;
       this.auras.addChild(molde, velo);
     }
@@ -475,6 +508,67 @@ export class Escena {
     const d = this.datos!;
     const g = this.lineas.clear();
     for (const t of d.trayectorias) flecha(g, t.desde, t.hasta, ROJO);
+  }
+
+  /**
+   * La cadena de coherencia: una línea de peana a peana por cada enganche. La
+   * miniatura que se coloca lleva la suya resaltada y medida, y su camino
+   * hasta el Comandante en oro; la que se suelta, en rojo con lo que mide.
+   */
+  private dibujarCadena(): void {
+    const d = this.datos!;
+    const g = this.enlaces.clear();
+    this.rotulos.removeChildren().forEach((c) => c.destroy());
+    if (!d.cadena) return;
+    const color = COLOR_JUGADOR[d.cadena.owner] ?? NEUTRO;
+    for (const e of d.cadena.eslabones) {
+      const dx = e.b.x - e.a.x;
+      const dy = e.b.y - e.a.y;
+      const l = Math.hypot(dx, dy) || 1;
+      const ux = dx / l;
+      const uy = dy / l;
+      // De borde a borde: lo que se ve es justo el hueco que se mide.
+      const p = { x: e.a.x + ux * e.ra, y: e.a.y + uy * e.ra };
+      const q = { x: e.b.x - ux * e.rb, y: e.b.y - uy * e.rb };
+      if (e.tipo === 'roto') {
+        const n = Math.max(2, Math.round(e.hueco / 0.25));
+        for (let i = 0; i < n; i += 2) {
+          const t0 = i / n;
+          const t1 = Math.min(1, (i + 1) / n);
+          g.moveTo(p.x + (q.x - p.x) * t0, p.y + (q.y - p.y) * t0)
+            .lineTo(p.x + (q.x - p.x) * t1, p.y + (q.y - p.y) * t1)
+            .stroke({ width: 0.09, color: ROJO, alpha: 0.95 });
+        }
+      } else {
+        const ancho = e.tipo === 'nuevo' ? 0.14 : e.tipo === 'camino' ? 0.1 : 0.07;
+        const tono = e.tipo === 'ok' ? color : ORO;
+        // Un trazo oscuro debajo para que se lea sobre cualquier suelo.
+        g.moveTo(p.x, p.y).lineTo(q.x, q.y).stroke({ width: ancho + 0.08, color: FONDO, alpha: 0.6 });
+        g.moveTo(p.x, p.y).lineTo(q.x, q.y).stroke({ width: ancho, color: tono, alpha: e.tipo === 'ok' ? 0.75 : 1 });
+        g.circle(p.x, p.y, ancho * 0.9).fill({ color: tono });
+        g.circle(q.x, q.y, ancho * 0.9).fill({ color: tono });
+      }
+      if (e.tipo === 'nuevo' || e.tipo === 'roto') {
+        const t = new Text({
+          text: `${e.hueco.toFixed(1)}"`,
+          style: {
+            fontFamily: 'system-ui, sans-serif',
+            fontSize: 11,
+            fontWeight: '700',
+            fill: e.tipo === 'roto' ? ROJO : ORO,
+            stroke: { color: FONDO, width: 3 },
+          },
+          resolution: 2,
+        });
+        t.anchor.set(0.5);
+        t.scale.set(1 / this.ppi);
+        // Al lado del tramo, sin tapar la línea ni las peanas: hacia arriba.
+        const off = 0.5 + Math.max(e.ra, e.rb) * 0.6;
+        const lado = ux >= 0 ? -1 : 1;
+        t.position.set((p.x + q.x) / 2 - uy * off * lado, (p.y + q.y) / 2 + ux * off * lado);
+        this.rotulos.addChild(t);
+      }
+    }
   }
 
   /** Marcas que laten: objetivos y puestos de despliegue. Se repintan cada fotograma. */

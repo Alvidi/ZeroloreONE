@@ -39,6 +39,7 @@ export type Command =
   | { type: 'Desplegar'; reservaId: string; puestoId: string; posiciones: readonly Vec2[] }
   | { type: 'Reforzar'; unidadId: string; reservaId: string; posicion: Vec2 }
   | { type: 'PasarDespliegue'; jugador: PlayerId }
+  | { type: 'Recolocar'; unidadId: string; posiciones: Readonly<Record<string, Vec2>> }
   | { type: 'ActivarUnidad'; unidadId: string }
   | { type: 'Mover'; unidadId: string; posiciones: Readonly<Record<string, Vec2>> }
   | { type: 'Correr'; unidadId: string; posiciones: Readonly<Record<string, Vec2>> }
@@ -123,6 +124,8 @@ export class Engine {
         return this.reforzar(cmd.unidadId, cmd.reservaId, cmd.posicion);
       case 'PasarDespliegue':
         return this.pasarDespliegue(cmd.jugador);
+      case 'Recolocar':
+        return this.recolocar(cmd.unidadId, cmd.posiciones);
       case 'ActivarUnidad':
         return this.activar(cmd.unidadId);
       case 'Mover':
@@ -304,19 +307,33 @@ export class Engine {
     ]);
   }
 
+  /**
+   * ¿Es el despliegue inicial? Ahí la escuadra se forma entera: el Comandante
+   * entra y se le arrastran sus soldados uno tras otro, que equivale a traerla
+   * montada desde la lista. Después, Refuerzos es una miniatura por turno.
+   */
+  private formandoEscuadras(): boolean {
+    return this.state.fase === 'Despliegue' && this.state.turno === 1;
+  }
+
   /** Por qué este Comandante no puede recibir esa miniatura. `null` si puede. */
   motivoRefuerzo(u: Unidad, reservaId: string): string | null {
     const entrada = this.state.reserva.find((r) => r.id === reservaId);
     if (!entrada || entrada.owner !== u.owner) return 'no está en tu Reserva';
     if (!comandanteDe(u)) return 'solo los Comandantes reciben refuerzos';
-    if (this.state.reforzados.includes(u.id)) return 'ya ha recibido su refuerzo este turno';
+    if (!this.formandoEscuadras() && this.state.reforzados.includes(u.id)) {
+      return 'ya ha recibido su refuerzo este turno';
+    }
     if (u.trabadaCon.length > 0) return 'está trabado en combate';
     if (entrada.minis.length !== 1 || entrada.minis[0]!.esComandante) return 'solo entra una miniatura suelta';
     const t = this.tipo(entrada.minis[0]!.tipoId);
     if (t.escuadra === null) return `${t.nombre} no forma escuadras`;
     const tropa = tropaDe(u);
-    if (tropa.length > 0 && tropa[0]!.tipoId !== t.id) return `la escuadra es de ${this.tipo(tropa[0]!.tipoId).nombre}`;
-    if (tropa.length >= t.escuadra) return 'la escuadra está completa';
+    if (tropa.length > 0 && tropa[0]!.tipoId !== t.id) {
+      const suya = this.tipo(tropa[0]!.tipoId).nombre;
+      return `ya está ocupado por ${suya}: solo admite ${suya}`;
+    }
+    if (tropa.length >= t.escuadra) return `la escuadra está completa (${t.escuadra} de ${t.nombre})`;
     return null;
   }
 
@@ -346,7 +363,53 @@ export class Engine {
       reserva: this.state.reserva.filter((r) => r.id !== reservaId),
       reforzados: [...this.state.reforzados, u.id],
     };
-    return ok([{ type: 'MiniaturaReforzada', unidadId: u.id, miniId: nueva.id }, ...this.pasarVezDespliegue()]);
+    const events: GameEvent[] = [{ type: 'MiniaturaReforzada', unidadId: u.id, miniId: nueva.id }];
+    /*
+      Formando escuadras en el despliegue inicial, añadir soldados no gasta la
+      vez: se sigue montando la escuadra hasta que se despliega otra cosa o se
+      dice "listo". Solo si ya no queda nada que hacer, pasa sola.
+    */
+    if (!this.formandoEscuadras() || !this.puedeDesplegarAlgo(u.owner)) events.push(...this.pasarVezDespliegue());
+    return ok(events);
+  }
+
+  /**
+   * ¿Se puede recolocar esta unidad? Solo en el despliegue inicial, mientras
+   * se forman las escuadras: se ajusta la formación a gusto, sin límite de
+   * distancia, con el Comandante tocando un puesto propio por el que se ha
+   * entrado este turno. Sin `posiciones` solo se pregunta si se puede empezar.
+   */
+  motivoRecolocar(u: Unidad, posiciones: Readonly<Record<string, Vec2>> | null): string | null {
+    if (!this.formandoEscuadras()) return 'solo se recoloca en el despliegue inicial';
+    if (u.owner !== this.state.jugadorActivo) return 'no es tu vez';
+    if (this.state.desplieguePasado[u.owner]) return 'ya has terminado de desplegar';
+    if (!posiciones) return null;
+    const ancla = anclaDe(u);
+    const p = posiciones[ancla.id];
+    if (!p) return 'falta colocar alguna miniatura';
+    const r = this.tipo(ancla.tipoId).radioPeana;
+    const toca = this.state.puestos.some(
+      (pu) => pu.duenio === u.owner && this.state.puestosUsados.includes(pu.id) && tocaPuesto(pu, p, r),
+    );
+    if (!toca) return u.minis.length > 1 ? 'el Comandante tiene que tocar el puesto' : 'tiene que tocar el puesto';
+    return this.motivoPosiciones(u, posiciones, null, DISTANCIA_ENEMIGO);
+  }
+
+  private recolocar(unidadId: string, posiciones: Readonly<Record<string, Vec2>>): CommandResult {
+    if (this.state.fase !== 'Despliegue') return fail('No es el momento de desplegar');
+    const u = this.unidad(unidadId);
+    if (!u) return fail(`No existe ${unidadId}`);
+    const motivo = this.motivoRecolocar(u, posiciones);
+    if (motivo) return fail(`No se puede recolocar: ${motivo}`);
+    const desde: Record<string, Vec2> = {};
+    const hasta: Record<string, Vec2> = {};
+    for (const m of u.minis) {
+      desde[m.id] = m.posicion;
+      hasta[m.id] = posiciones[m.id]!;
+    }
+    this.parchear(u.id, { minis: u.minis.map((m) => ({ ...m, posicion: posiciones[m.id]! })) });
+    // Como añadir soldados, ajustar la formación no gasta la vez.
+    return ok([{ type: 'UnidadMovida', unidadId, desde, hasta, corriendo: false }]);
   }
 
   private pasarDespliegue(jugador: PlayerId): CommandResult {

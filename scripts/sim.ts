@@ -14,20 +14,23 @@ const tipos = leerCatalogo(JSON.parse(readFileSync(resolve('packages/data/catalo
 const partidas = Number(process.argv[2] ?? 20);
 const semilla0 = Number(process.argv[3] ?? 1);
 
+/** Todo sale suelto, como en la web: las escuadras se forman en la mesa. */
+const suelto = (tipoId: string, n = 1): EntradaLista[] => Array.from({ length: n }, () => ({ tipoId }));
+
 const LISTAS: Record<string, EntradaLista[]> = {
   A: [
-    { tipoId: 'comandante-disparo', escuadra: { tipoId: 'tirador', cantidad: 3 } },
-    { tipoId: 'comandante-cac', escuadra: { tipoId: 'choque', cantidad: 3 } },
-    { tipoId: 'juggernaut' },
-    { tipoId: 'tirador' },
-    { tipoId: 'choque' },
+    ...suelto('comandante-disparo'),
+    ...suelto('comandante-cac'),
+    ...suelto('tirador', 4),
+    ...suelto('choque', 4),
+    ...suelto('juggernaut'),
   ],
   B: [
-    { tipoId: 'comandante-cac', escuadra: { tipoId: 'milicia', cantidad: 6 } },
-    { tipoId: 'exterminador' },
-    { tipoId: 'comandante-disparo', escuadra: { tipoId: 'tirador', cantidad: 3 } },
-    { tipoId: 'milicia' },
-    { tipoId: 'milicia' },
+    ...suelto('comandante-cac'),
+    ...suelto('comandante-disparo'),
+    ...suelto('milicia', 8),
+    ...suelto('tirador', 3),
+    ...suelto('exterminador'),
   ],
 };
 

@@ -92,3 +92,36 @@ describe('IA contra IA', () => {
     expect(vistos).toContain('cac');
   });
 });
+
+describe('la máquina forma sus escuadras en la mesa', () => {
+  it('saca primero al Comandante y le arrastra la tropa de la que más sueltas tiene', () => {
+    const e = new Engine(crearPartida({
+      tipos: TIPOS,
+      jugadores: ['A', 'B'],
+      listas: {
+        A: [{ tipoId: 'milicia' }, { tipoId: 'tirador' }, { tipoId: 'tirador' }, { tipoId: 'comandante-disparo' }],
+        B: [{ tipoId: 'juggernaut' }],
+      },
+      terreno: [],
+      puestos: PUESTOS,
+      mesa: { ancho: 60, alto: 30 },
+      turnosTotales: 5,
+      semilla: 5,
+    }));
+    e.execute({ type: 'TirarIniciativa' });
+    const deA: string[] = [];
+    for (let i = 0; i < 40 && e.getState().fase === 'Despliegue'; i++) {
+      const j = e.getState().jugadorActivo!;
+      const jugada = siguienteJugada(e.getState(), j);
+      if (!jugada) break;
+      if (j === 'A') deA.push(jugada.cmd.type === 'Desplegar' || jugada.cmd.type === 'Reforzar' ? `${jugada.cmd.type}:${jugada.cmd.reservaId}` : jugada.cmd.type);
+      const r = e.execute(jugada.cmd);
+      expect(r.ok, r.ok ? '' : r.reason).toBe(true);
+    }
+    // A4 es el Comandante; A2 y A3, los Tiradores.
+    expect(deA.slice(0, 3)).toEqual(['Desplegar:A4', 'Reforzar:A2', 'Reforzar:A3']);
+    const comandante = e.getState().unidades.A4!;
+    expect(comandante.minis.map((m) => m.tipoId)).toEqual(['comandante-disparo', 'tirador', 'tirador']);
+  });
+});
+

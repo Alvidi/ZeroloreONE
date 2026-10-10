@@ -401,6 +401,86 @@ describe('refuerzos', () => {
   });
 });
 
+describe('formar escuadras en la mesa', () => {
+  /** Un Comandante solo en mesa, dos Tiradores y una Milicia sueltos en la Reserva. */
+  function montando(turno: number): Engine {
+    const base = enMesa({
+      unidades: [{ id: 'A1', owner: 'A', minis: [{ tipo: 'comandante-disparo', x: 10, y: 10 }] }],
+      puestos: [CG_A, CG_B],
+    });
+    return new Engine({
+      ...base,
+      turno,
+      fase: 'Despliegue',
+      ordenIniciativa: ['A', 'B'],
+      jugadorActivo: 'A',
+      reserva: [
+        { id: 'A7', owner: 'A', minis: [{ tipoId: 'tirador', esComandante: false }] },
+        { id: 'A8', owner: 'A', minis: [{ tipoId: 'tirador', esComandante: false }] },
+        { id: 'A9', owner: 'A', minis: [{ tipoId: 'milicia', esComandante: false }] },
+        { id: 'B1', owner: 'B', minis: [{ tipoId: 'juggernaut', esComandante: false }] },
+      ],
+    });
+  }
+
+  it('en el despliegue inicial se le arrastran soldados uno tras otro sin pasar la vez', () => {
+    const e = montando(1);
+    const r1 = e.execute({ type: 'Reforzar', unidadId: 'A1', reservaId: 'A7', posicion: vec(11.3, 10) });
+    expect(r1.ok, r1.ok ? '' : r1.reason).toBe(true);
+    expect(e.getState().jugadorActivo).toBe('A');
+    const r2 = e.execute({ type: 'Reforzar', unidadId: 'A1', reservaId: 'A8', posicion: vec(12.6, 10) });
+    expect(r2.ok, r2.ok ? '' : r2.reason).toBe(true);
+    expect(e.getState().unidades.A1!.minis).toHaveLength(3);
+    expect(e.getState().jugadorActivo).toBe('A');
+  });
+
+  it('con tropa de un tipo, otro tipo no cabe: está ocupado', () => {
+    const e = montando(1);
+    e.execute({ type: 'Reforzar', unidadId: 'A1', reservaId: 'A7', posicion: vec(11.3, 10) });
+    const u = e.getState().unidades.A1!;
+    expect(e.motivoRefuerzo(u, 'A9')).toMatch(/ocupado por Tirador/);
+    const r = e.execute({ type: 'Reforzar', unidadId: 'A1', reservaId: 'A9', posicion: vec(12.6, 10) });
+    expect(r.ok).toBe(false);
+  });
+
+  it('no pasa del máximo de escuadra del tipo', () => {
+    const base = enMesa({ unidades: [escuadra('A1', 'A', 'comandante-disparo', 'tirador', 5, 10, 10)] });
+    const e = new Engine({
+      ...base,
+      fase: 'Despliegue',
+      reserva: [{ id: 'A9', owner: 'A', minis: [{ tipoId: 'tirador', esComandante: false }] }],
+    });
+    expect(e.motivoRefuerzo(e.getState().unidades.A1!, 'A9')).toMatch(/completa/);
+  });
+
+  it('en el despliegue inicial se recoloca la formación sin pasar la vez', () => {
+    const e = montando(1);
+    e.execute({ type: 'Reforzar', unidadId: 'A1', reservaId: 'A7', posicion: vec(11.3, 10) });
+    // El Comandante tiene que tocar el puesto por el que entró: se marca como usado.
+    const s = e.getState();
+    const conPuesto = new Engine({ ...s, puestosUsados: ['cg-a'] });
+    const fuera = conPuesto.execute({ type: 'Recolocar', unidadId: 'A1', posiciones: { 'A1.0': vec(30, 10), 'A1.A7': vec(31.3, 10) } });
+    expect(fuera.ok).toBe(false);
+    const r = conPuesto.execute({ type: 'Recolocar', unidadId: 'A1', posiciones: { 'A1.0': vec(10, 14), 'A1.A7': vec(10, 15.3) } });
+    expect(r.ok, r.ok ? '' : r.reason).toBe(true);
+    expect(conPuesto.getState().unidades.A1!.minis.map((m) => m.posicion)).toEqual([vec(10, 14), vec(10, 15.3)]);
+    expect(conPuesto.getState().jugadorActivo).toBe('A');
+  });
+
+  it('a partir del turno 2 no se recoloca', () => {
+    const e = montando(2);
+    expect(e.motivoRecolocar(e.getState().unidades.A1!, null)).toMatch(/despliegue inicial/);
+  });
+
+  it('a partir del turno 2 es un refuerzo por turno y pasa la vez', () => {
+    const e = montando(2);
+    const r = e.execute({ type: 'Reforzar', unidadId: 'A1', reservaId: 'A7', posicion: vec(11.3, 10) });
+    expect(r.ok, r.ok ? '' : r.reason).toBe(true);
+    expect(e.getState().jugadorActivo).toBe('B');
+    expect(e.motivoRefuerzo(e.getState().unidades.A1!, 'A8')).toMatch(/este turno/);
+  });
+});
+
 describe('el motor no cambia nada si la orden es ilegal', () => {
   it('ni el estado ni los dados', () => {
     const e = activada({ unidades: [escuadra('A1', 'A', 'comandante-disparo', 'tirador', 3, 10, 10)] }, 'A1');

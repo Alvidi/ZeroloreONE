@@ -5,6 +5,8 @@ import {
   add,
   anclaDe,
   centerDistance,
+  comandanteDe,
+  COHERENCIA,
   formar,
   motivoSitio,
   normalize,
@@ -106,35 +108,50 @@ export interface Colocacion {
 }
 
 /**
- * Hacia dónde iría la unidad si su Comandante va a `cursor`. Si el cursor se
- * pasa del alcance, el Comandante se queda en el borde, en línea con él.
+ * Cómo se desplaza una unidad: moviendo o corriendo en su activación, o
+ * recolocándose en el despliegue inicial (sin límite, tocando su puesto).
+ */
+export type Desplazamiento = 'Mover' | 'Correr' | 'Recolocar';
+
+/** El motor al que preguntar y el alcance: recolocar no activa ni tiene tope. */
+function paraDesplazar(estado: GameState, unidadId: string, accion: Desplazamiento): { e: Engine; u: Unidad; alcance: number | null } {
+  const e = accion === 'Recolocar' ? new Engine(estado) : consulta(estado, unidadId);
+  const u = e.getState().unidades[unidadId]!;
+  return { e, u, alcance: accion === 'Recolocar' ? null : e.alcanceDe(u, accion) };
+}
+
+/**
+ * Hacia dónde iría la unidad si su Comandante va a `cursor`, conservando la
+ * formación de `actual` (por defecto, donde está). Si el cursor se pasa del
+ * alcance, el Comandante se queda en el borde, en línea con él.
  */
 export function colocarMovimiento(
   estado: GameState,
   unidadId: string,
-  accion: 'Mover' | 'Correr',
+  accion: Desplazamiento,
   cursor: Vec2,
+  actual?: Readonly<Record<string, Vec2>>,
 ): Colocacion {
-  const e = consulta(estado, unidadId);
-  const u = e.getState().unidades[unidadId]!;
+  const { e, u, alcance } = paraDesplazar(estado, unidadId, accion);
   const ancla = anclaDe(u);
-  const alcance = e.alcanceDe(u, accion);
   let destino = cursor;
   const d = centerDistance(ancla.posicion, cursor);
-  if (d > alcance) destino = add(ancla.posicion, scale(normalize(sub(cursor, ancla.posicion)), alcance));
+  if (alcance !== null && d > alcance) destino = add(ancla.posicion, scale(normalize(sub(cursor, ancla.posicion)), alcance));
 
   const R = restriccionesPara(e.getState(), u.owner, u.id, DISTANCIA_ENEMIGO);
-  const piezas = e.piezasDe(u);
+  // Con una formación ya hecha a mano, se lleva tal cual: el Comandante tira de ella.
+  const piezas = e.piezasDe(u).map((p) => ({ ...p, desde: actual?.[p.id] ?? p.desde }));
+  const origen = actual?.[ancla.id] ?? ancla.posicion;
   // Del sitio pedido hacia atrás, por si con un muro en medio no llega.
   for (const f of [1, 0.9, 0.8, 0.65, 0.5]) {
-    const objetivo = add(ancla.posicion, scale(sub(destino, ancla.posicion), f));
-    const pos = formar(piezas, objetivo, R, alcance);
+    const objetivo = add(origen, scale(sub(destino, origen), f));
+    const pos = formar(piezas, objetivo, R, actual ? null : alcance);
     if (pos) return revisarColocacion(estado, unidadId, accion, pos);
   }
   // No cabe: se enseña en rojo donde quedaría en bloque.
   const enBloque: Record<string, Vec2> = {};
-  const delta = sub(destino, ancla.posicion);
-  for (const m of u.minis) enBloque[m.id] = add(m.posicion, delta);
+  const delta = sub(destino, origen);
+  for (const p of piezas) enBloque[p.id] = add(p.desde, delta);
   return revisarColocacion(estado, unidadId, accion, enBloque);
 }
 
@@ -142,26 +159,108 @@ export function colocarMovimiento(
 export function revisarColocacion(
   estado: GameState,
   unidadId: string,
-  accion: 'Mover' | 'Correr',
+  accion: Desplazamiento,
   posiciones: Record<string, Vec2>,
 ): Colocacion {
-  const e = consulta(estado, unidadId);
-  const u = e.getState().unidades[unidadId]!;
-  const alcance = e.alcanceDe(u, accion);
+  const { e, u, alcance } = paraDesplazar(estado, unidadId, accion);
   const R = restriccionesPara(e.getState(), u.owner, u.id, DISTANCIA_ENEMIGO);
   const malas = new Set<string>();
   const colocadas: { centro: Vec2; radio: number }[] = [];
   for (const m of u.minis) {
     const p = posiciones[m.id]!;
     const r = TIPOS[m.tipoId]!.radioPeana;
-    const camino = recorrido(m.posicion, p, r, R.terreno);
-    if (camino === null || camino > alcance + 1e-6 || motivoSitio(p, r, R, colocadas) !== null) malas.add(m.id);
+    if (alcance !== null) {
+      const camino = recorrido(m.posicion, p, r, R.terreno);
+      if (camino === null || camino > alcance + 1e-6) malas.add(m.id);
+    }
+    if (motivoSitio(p, r, R, colocadas) !== null) malas.add(m.id);
     colocadas.push({ centro: p, radio: r });
   }
   // Si se rompe la coherencia, en rojo solo las que quedan fuera de la cadena del Comandante.
   for (const id of fueraDeLaCadena(u, posiciones)) malas.add(id);
-  const motivo = e.motivoPosiciones(u, posiciones, alcance, DISTANCIA_ENEMIGO);
+  const motivo = accion === 'Recolocar'
+    ? e.motivoRecolocar(u, posiciones)
+    : e.motivoPosiciones(u, posiciones, alcance, DISTANCIA_ENEMIGO);
+  // Recolocando, el Comandante que se sale del puesto también va en rojo.
+  if (accion === 'Recolocar' && motivo?.includes('puesto')) malas.add(anclaDe(u).id);
   return { posiciones, malas, motivo };
+}
+
+// ------------------------------------------------------------------ La cadena
+
+/** Un eslabón de la cadena de coherencia, de borde a borde de peana. */
+export interface Eslabon {
+  readonly a: Vec2;
+  readonly ra: number;
+  readonly b: Vec2;
+  readonly rb: number;
+  /** Hueco entre las dos peanas, en pulgadas. */
+  readonly hueco: number;
+  /**
+   * 'nuevo': la miniatura que se está colocando; 'camino': los eslabones de
+   * ella hasta el Comandante; 'roto': a más de 1" de la cadena; 'ok': el resto.
+   */
+  readonly tipo: 'ok' | 'camino' | 'nuevo' | 'roto';
+}
+
+export interface PiezaCadena {
+  readonly id: string;
+  readonly centro: Vec2;
+  readonly radio: number;
+}
+
+/**
+ * Quién engancha con quién. Se crece desde el Comandante cogiendo siempre el
+ * eslabón más corto (un árbol de expansión mínimo): cada miniatura queda
+ * colgada de la que tiene más cerca dentro de la cadena. Las que no llegan
+ * a 1" de nadie se unen con un eslabón roto a la más cercana, para ver cuánto
+ * les falta. Si hay una `destacada`, se marca su camino hasta el Comandante.
+ */
+export function cadenaDe(piezas: readonly PiezaCadena[], anclaId: string, destacada: string | null): Eslabon[] {
+  const hueco = (p: PiezaCadena, q: PiezaCadena): number =>
+    Math.max(0, centerDistance(p.centro, q.centro) - p.radio - q.radio);
+  const padre = new Map<string, string>();
+  const dentro = new Set([anclaId]);
+  const porId = new Map(piezas.map((p) => [p.id, p]));
+  if (!porId.has(anclaId)) return [];
+  for (;;) {
+    let mejor: { de: string; a: string; h: number } | null = null;
+    for (const p of piezas) {
+      if (dentro.has(p.id)) continue;
+      for (const id of dentro) {
+        const h = hueco(p, porId.get(id)!);
+        if (h <= COHERENCIA + 1e-9 && (!mejor || h < mejor.h)) mejor = { de: p.id, a: id, h };
+      }
+    }
+    if (!mejor) break;
+    dentro.add(mejor.de);
+    padre.set(mejor.de, mejor.a);
+  }
+  // El camino de la destacada hasta el Comandante.
+  const camino = new Set<string>();
+  for (let id = destacada ? padre.get(destacada) : undefined; id && id !== anclaId; id = padre.get(id)) camino.add(id);
+
+  const out: Eslabon[] = [];
+  for (const p of piezas) {
+    if (p.id === anclaId) continue;
+    let q: PiezaCadena | undefined;
+    let tipo: Eslabon['tipo'];
+    if (dentro.has(p.id)) {
+      q = porId.get(padre.get(p.id)!)!;
+      tipo = p.id === destacada ? 'nuevo' : camino.has(p.id) ? 'camino' : 'ok';
+    } else {
+      // Suelta: hacia la más cercana de la cadena.
+      q = [...dentro].map((id) => porId.get(id)!).sort((x, y) => hueco(p, x) - hueco(p, y))[0];
+      tipo = 'roto';
+    }
+    if (q) out.push({ a: p.centro, ra: p.radio, b: q.centro, rb: q.radio, hueco: hueco(p, q), tipo });
+  }
+  return out;
+}
+
+/** Las piezas de una unidad para la cadena, con posiciones propuestas si las hay. */
+export function piezasCadena(u: Unidad, posiciones?: Readonly<Record<string, Vec2>>): PiezaCadena[] {
+  return u.minis.map((m) => ({ id: m.id, centro: posiciones?.[m.id] ?? m.posicion, radio: TIPOS[m.tipoId]!.radioPeana }));
 }
 
 /** Miniaturas que no quedan unidas al Comandante por la cadena de 1". */
@@ -221,22 +320,34 @@ export function colocarDespliegue(estado: GameState, reservaId: string, cursor: 
   return { posiciones: piezas.map((p) => p.desde), puestoId: puesto?.id ?? null, valida: false };
 }
 
+/**
+ * El Comandante propio más cercano al cursor (a 3" o menos) y, si no puede
+ * recibir esta miniatura, por qué: así soltar un Élite sobre una escuadra de
+ * Milicia dice que está ocupada en vez de no hacer nada.
+ */
+export function comandanteCercano(estado: GameState, reservaId: string, cursor: Vec2): { u: Unidad; motivo: string | null } | null {
+  const r = estado.reserva.find((x) => x.id === reservaId);
+  if (!r) return null;
+  const e = new Engine(estado);
+  const cerca: { u: Unidad; motivo: string | null; d: number }[] = [];
+  for (const u of Object.values(estado.unidades)) {
+    if (u.owner !== r.owner || !comandanteDe(u)) continue;
+    const d = Math.min(...u.minis.map((m) => centerDistance(m.posicion, cursor)));
+    if (d < 3) cerca.push({ u, motivo: e.motivoRefuerzo(u, reservaId), d });
+  }
+  cerca.sort((a, b) => a.d - b.d);
+  const masCerca = cerca[0];
+  if (!masCerca) return null;
+  // Entre dos escuadras pegadas se prefiere la que sí la admite.
+  const admite = cerca.find((c) => c.motivo === null && c.d <= masCerca.d + 1);
+  const elegido = admite ?? masCerca;
+  return { u: elegido.u, motivo: elegido.motivo };
+}
+
 /** El Comandante propio bajo el cursor que puede recibir esta miniatura. */
 export function comandanteParaRefuerzo(estado: GameState, reservaId: string, cursor: Vec2): Unidad | null {
-  const e = new Engine(estado);
-  let mejor: Unidad | null = null;
-  let d = Infinity;
-  for (const u of Object.values(estado.unidades)) {
-    if (e.motivoRefuerzo(u, reservaId) !== null) continue;
-    for (const m of u.minis) {
-      const dm = centerDistance(m.posicion, cursor);
-      if (dm < 3 && dm < d) {
-        d = dm;
-        mejor = u;
-      }
-    }
-  }
-  return mejor;
+  const c = comandanteCercano(estado, reservaId, cursor);
+  return c && c.motivo === null ? c.u : null;
 }
 
 /** Hueco para el refuerzo pegado a la escuadra, lo más cerca del cursor posible. */

@@ -51,23 +51,36 @@ export function siguienteJugada(state: GameState, jugador: PlayerId): Jugada | n
 function jugadaDeDespliegue(e: Engine, jugador: PlayerId): Jugada {
   const s = e.getState();
 
-  // Primero los refuerzos: engordar una escuadra que ya está en mesa.
+  // Primero los refuerzos: engordar una escuadra que ya está en mesa. Si el
+  // Comandante va solo, con la tropa de la que más sueltas haya: así sale la
+  // escuadra más grande posible.
   for (const u of Object.values(s.unidades)) {
     if (u.owner !== jugador || !comandanteDe(u)) continue;
-    for (const r of s.reserva) {
-      if (e.motivoRefuerzo(u, r.id) !== null) continue;
-      const sitio = huecoJuntoA(e, u, r.minis[0]!.tipoId);
-      if (sitio) return { cmd: { type: 'Reforzar', unidadId: u.id, reservaId: r.id, posicion: sitio }, motivo: `refuerza a ${u.id}` };
-    }
+    const validas = s.reserva.filter((r) => e.motivoRefuerzo(u, r.id) === null);
+    if (validas.length === 0) continue;
+    const cuenta = new Map<string, number>();
+    for (const r of validas) cuenta.set(r.minis[0]!.tipoId, (cuenta.get(r.minis[0]!.tipoId) ?? 0) + 1);
+    const tipo = [...cuenta.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+    const r = validas.find((x) => x.minis[0]!.tipoId === tipo)!;
+    const sitio = huecoJuntoA(e, u, tipo);
+    if (sitio) return { cmd: { type: 'Reforzar', unidadId: u.id, reservaId: r.id, posicion: sitio }, motivo: `refuerza a ${u.id}` };
   }
 
-  // Después, sacar la unidad de más Valor por el puesto más adelantado.
+  // Después, sacar unidades por el puesto más adelantado: los Comandantes
+  // primero si hay tropa suelta para ellos, y luego lo de más Valor.
   const puestos = s.puestos
     .filter((p) => puedeDesplegarEn(s, p, jugador))
     .sort((a, b) => Number(a.esCuartelGeneral) - Number(b.esCuartelGeneral));
+  const haySueltas = s.reserva.some(
+    (r) => r.owner === jugador && r.minis.length === 1 && s.tipos[r.minis[0]!.tipoId]?.escuadra != null,
+  );
+  const esComandante = (r: GameState['reserva'][number]): boolean => r.minis.some((m) => m.esComandante);
   const reservas = s.reserva
     .filter((r) => r.owner === jugador)
-    .sort((a, b) => valorReserva(s, b) - valorReserva(s, a));
+    .sort((a, b) => {
+      if (haySueltas && esComandante(a) !== esComandante(b)) return esComandante(a) ? -1 : 1;
+      return valorReserva(s, b) - valorReserva(s, a);
+    });
   for (const p of puestos) {
     for (const r of reservas) {
       const posiciones = posicionesDeDespliegue(e, r.id, p);

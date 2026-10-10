@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import {
   comandanteDe,
   formatCantidad,
@@ -33,8 +32,6 @@ export interface PanelProps {
   readonly estado: GameState;
   readonly jugador: PlayerId;
   readonly seleccion: string | null;
-  /** Lo que va en medio: la ficha, o la previsión cuando se apunta. */
-  readonly centro: ReactNode;
   readonly cartas: readonly Carta[];
   readonly reservaEnMano: string | null;
   readonly puedeDesplegar: (reservaId: string) => boolean;
@@ -45,6 +42,11 @@ export interface PanelProps {
   readonly onCarta: (id: string) => void;
 }
 
+/**
+ * La banda de abajo es tuya: lo que tienes en mesa, lo que espera en Reserva y
+ * tus cartas, todo junto y en el centro. La ficha de una unidad y la previsión
+ * de un ataque no viven aquí: flotan sobre la mesa solo cuando hacen falta.
+ */
 export function Panel(p: PanelProps) {
   const mias = Object.values(p.estado.unidades).filter((u) => u.owner === p.jugador);
   const reserva = p.estado.reserva.filter((r) => r.owner === p.jugador);
@@ -67,6 +69,7 @@ export function Panel(p: PanelProps) {
             ))}
           </div>
         </div>
+        <div className="separador" />
         <div className="grupo reserva">
           <h3>
             Reserva <i>{reserva.length}</i>
@@ -86,8 +89,6 @@ export function Panel(p: PanelProps) {
           </div>
         </div>
       </section>
-
-      <section className="centro">{p.centro}</section>
 
       <section className="equipo">
         <h3>Equipamiento <i>{p.cartas.length}</i></h3>
@@ -111,6 +112,10 @@ export function Panel(p: PanelProps) {
   );
 }
 
+/**
+ * Una unidad en el panel. Una escuadra se ve como lo que es: su tropa con el
+ * número de miniaturas, y debajo el Comandante que la lleva.
+ */
 function FichaUnidad({ estado, u, seleccionada, activa, onClick }: {
   estado: GameState;
   u: Unidad;
@@ -120,17 +125,22 @@ function FichaUnidad({ estado, u, seleccionada, activa, onClick }: {
 }) {
   const r = rotulo(u);
   const v = vidaDe(estado, u);
+  const tropa = tropaDe(u);
+  const comandante = comandanteDe(u);
   const clases = ['ficha-unidad', seleccionada ? 'sel' : '', activa ? 'activa' : '', u.activada ? 'dormida' : '', u.trabadaCon.length > 0 ? 'trabada' : '']
     .filter(Boolean)
     .join(' ');
   return (
     <button className={clases} onClick={onClick} title={`${r.titulo}${r.detalle ? ` · ${r.detalle}` : ''}`}>
-      <img src={iconoDe(r.tipoId)} alt="" draggable={false} />
-      {u.minis.length > 1 && <span className="cuenta">{u.minis.length}</span>}
-      {comandanteDe(u) && <span className="corona">★</span>}
+      <span className="arte">
+        <img src={iconoDe(r.tipoId)} alt="" draggable={false} />
+        {comandante && tropa.length > 0 && <img className="mando" src={iconoDe(comandante.tipoId)} alt="" draggable={false} />}
+        {u.activada && <span className="marca">z</span>}
+        {u.trabadaCon.length > 0 && <span className="marca cac">⚔</span>}
+      </span>
+      <b className="nombre">{r.titulo}{tropa.length > 0 && <i> ×{tropa.length}</i>}</b>
+      <span className="mandado">{comandante ? `★ ${TIPOS[comandante.tipoId]!.nombre.replace('Comandante ', 'Cte. ')}` : 'suelta'}</span>
       <span className="barra"><i style={{ width: `${(v.actuales / Math.max(1, v.maximas)) * 100}%`, background: colorVida(v.actuales, v.maximas) }} /></span>
-      {u.activada && <span className="marca">z</span>}
-      {u.trabadaCon.length > 0 && <span className="marca cac">⚔</span>}
     </button>
   );
 }
@@ -142,6 +152,8 @@ function FichaReserva({ r, enMano, disponible, onCoger }: {
   onCoger: () => void;
 }) {
   const ro = rotuloReserva(r.minis);
+  const tropa = r.minis.filter((m) => !m.esComandante);
+  const comandante = r.minis.find((m) => m.esComandante);
   return (
     <button
       className={`ficha-unidad reserva ${enMano ? 'en-mano' : ''} ${disponible ? '' : 'bloqueada'}`}
@@ -153,9 +165,14 @@ function FichaReserva({ r, enMano, disponible, onCoger }: {
         if (disponible) onCoger();
       }}
     >
-      <img src={iconoDe(ro.tipoId)} alt="" draggable={false} />
-      {r.minis.length > 1 && <span className="cuenta">{r.minis.length}</span>}
-      {r.minis.some((m) => m.esComandante) && <span className="corona">★</span>}
+      <span className="arte">
+        <img src={iconoDe(ro.tipoId)} alt="" draggable={false} />
+        {comandante && tropa.length > 0 && <img className="mando" src={iconoDe(comandante.tipoId)} alt="" draggable={false} />}
+      </span>
+      <b className="nombre">{ro.titulo}{tropa.length > 0 && comandante && <i> ×{tropa.length}</i>}</b>
+      <span className="mandado">
+        {comandante ? `★ ${TIPOS[comandante.tipoId]!.nombre.replace('Comandante ', 'Cte. ')}` : 'suelta · refuerzo'}
+      </span>
     </button>
   );
 }
